@@ -1,4 +1,12 @@
+"""
+Filename: Impedence Theta.py
+Author: Chaitanya Sharma, Ethan Ruddell
+Date: 2025-01-16
+Description: Contains commands for impedance vs theta measurements.
+"""
+
 import os
+import sys
 import pyvisa
 import numpy as np
 import matplotlib
@@ -6,6 +14,8 @@ import matplotlib
 # Use non-interactive backend so script finishes without waiting for plot windows
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from pathlib import Path
+
 
 # ==============================
 # User settings (EDIT THESE)
@@ -22,13 +32,40 @@ NUM_POINTS = 201        # number of points in LOG sweep
 APPLY_DC_BIAS = True    # True = apply a fixed DC bias; False = no DC bias
 DC_BIAS_V = 0.0         # bias voltage (V) if APPLY_DC_BIAS = True
 
-# Output folder
-OUTPUT_DIR = r"C:\Users\NRG\PycharmProjects\Agilent 4294A Impedance Analyzer\output_impedance_theta"
+# Get the path to the current script directory
+script_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+
+# Name a new "output" folder in the script directory
+output_dir = os.path.join(script_dir, "output")
+
+# Create the directory
+try:
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"Directory '{output_dir}' ensured.")
+except OSError as e:
+    print(f"Error creating directory {output_dir}: {e}")
 
 
 # ==============================
 # Helper functions
 # ==============================
+
+def uniquify(path_string):
+    """
+    Generates a unique file path by appending an incrementing number 
+    if the original file already exists.
+    """
+    path = Path(path_string)
+    filename = path.stem
+    extension = path.suffix
+    counter = 1
+
+    while path.exists():
+        path_string = f"{filename} ({counter}){extension}"
+        path = Path(path_string)
+        counter += 1
+    
+    return str(path)
 
 def ensure_output_dir(path):
     os.makedirs(path, exist_ok=True)
@@ -158,7 +195,7 @@ def measure_impedance_vs_freq(inst):
 # ==============================
 
 def main():
-    ensure_output_dir(OUTPUT_DIR)
+    ensure_output_dir(output_dir)
 
     inst = connect_4294a()
     try:
@@ -188,7 +225,7 @@ def main():
         plt.title(title1)
         plt.grid(True, which="both")
 
-        fig1_path = os.path.join(OUTPUT_DIR, "impedance_magnitude_vs_frequency.png")
+        fig1_path = uniquify(os.path.join(output_dir, "impedance_magnitude_vs_frequency.png"))
         fig1.savefig(fig1_path, dpi=300, bbox_inches="tight")
         plt.close(fig1)
 
@@ -203,7 +240,7 @@ def main():
         plt.title(title2)
         plt.grid(True, which="both")
 
-        fig2_path = os.path.join(OUTPUT_DIR, "impedance_phase_vs_frequency.png")
+        fig2_path = uniquify(os.path.join(output_dir, "impedance_phase_vs_frequency.png"))
         fig2.savefig(fig2_path, dpi=300, bbox_inches="tight")
         plt.close(fig2)
 
@@ -213,7 +250,7 @@ def main():
         # SAVE DATA TO CSV
         # ==========================
 
-        csv_path = os.path.join(OUTPUT_DIR, "impedance_vs_frequency.csv")
+        csv_path = uniquify(os.path.join(output_dir, "impedance_vs_frequency.csv"))
         data = np.column_stack([freq_axis, z_mag, theta_deg, z_real, z_imag])
         header = "frequency_Hz, Z_mag_ohm, theta_deg, Z_real_ohm, Z_imag_ohm"
 

@@ -1,3 +1,10 @@
+"""
+Filename: Dielectric Measurements.py
+Author: Chaitanya Sharma, Ethan Ruddell
+Date: 2025-01-16
+Description: Contains commands for dielectric measurements.
+"""
+
 import os
 import pyvisa
 import numpy as np
@@ -29,8 +36,18 @@ freq_stop = 0  # 1 MHz
 freq_points = 0
 bias_for_f_sweep = 0  # V
 
-# Output folder (EDIT THIS to any folder you like)
-OUTPUT_DIR = r"C:\Users\NRG\PycharmProjects\Agilent 4294A Impedance Analyzer\output"
+# Get the path to the current script directory
+script_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+
+# Name a new "output" folder in the script directory
+output_dir = os.path.join(script_dir, "output")
+
+# Create the directory
+try:
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"Directory '{output_dir}' ensured.")
+except OSError as e:
+    print(f"Error creating directory {output_dir}: {e}")
 
 
 # ==============================
@@ -214,7 +231,7 @@ def measure_eps_vs_freq(inst):
 
 
 def main():
-    ensure_output_dir(OUTPUT_DIR) # run check to ensure output directory exists
+    ensure_output_dir(output_dir) # run check to ensure output directory exists
 
     inst = connect_4294a() # connect to instrument
     try:
@@ -290,7 +307,7 @@ def main():
         # TODO: iterate filenames to prevent overwriting
         
         # C–V + εr(V) for all cycles
-        cv_filename = os.path.join(OUTPUT_DIR, "cv_dielectric_cycles.csv")
+        cv_filename = os.path.join(output_dir, "cv_dielectric_cycles.csv")
         cv_data = np.column_stack([cycles_all, v_all, cp_all, eps_all])
         np.savetxt(
             cv_filename,
@@ -302,7 +319,7 @@ def main():
         print(f"Saved C–V & εr(V) data to: {cv_filename}")
 
         # εr(f) data
-        freq_filename = os.path.join(OUTPUT_DIR, "eps_vs_freq.csv")
+        freq_filename = os.path.join(output_dir, "eps_vs_freq.csv")
         freq_data = np.column_stack([freq_axis, cp_f, eps_f])
         np.savetxt(
             freq_filename,
@@ -314,10 +331,10 @@ def main():
         print(f"Saved εr(f) data to: {freq_filename}")
 
         # PNGs for all plots
-        fig1.savefig(os.path.join(OUTPUT_DIR, "cv_curve.png"), dpi=300, bbox_inches="tight")
-        fig2.savefig(os.path.join(OUTPUT_DIR, "dielectric_butterfly.png"), dpi=300, bbox_inches="tight")
-        fig3.savefig(os.path.join(OUTPUT_DIR, "eps_vs_freq.png"), dpi=300, bbox_inches="tight")
-        print(f"Saved plot images to: {OUTPUT_DIR}")
+        fig1.savefig(os.path.join(output_dir, "cv_curve.png"), dpi=300, bbox_inches="tight")
+        fig2.savefig(os.path.join(output_dir, "dielectric_butterfly.png"), dpi=300, bbox_inches="tight")
+        fig3.savefig(os.path.join(output_dir, "eps_vs_freq.png"), dpi=300, bbox_inches="tight")
+        print(f"Saved plot images to: {output_dir}")
 
     finally:
         try:
