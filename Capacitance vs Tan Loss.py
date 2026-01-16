@@ -197,7 +197,7 @@ def measure_cpd_vs_freq(inst):
 # ==============================
 
 def main():
-    ensure_output_dir(OUTPUT_DIR)
+    ensure_output_dir(output_dir)
 
     inst = connect_4294a()
     try:
