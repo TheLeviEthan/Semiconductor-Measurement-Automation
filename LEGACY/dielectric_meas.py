@@ -9,6 +9,7 @@ import os
 import pyvisa
 import numpy as np
 import matplotlib
+import sys
 
 matplotlib.use("TkAgg")  # use Agg if TkAgg fails and you only want files
 import matplotlib.pyplot as plt
@@ -171,7 +172,6 @@ def compute_eps_r(cp_array, thickness_nm, diameter_um):
 # Main measurement flow
 # ==============================
 
-
 # TODO: add more measurements, error handling
 
 def measure_single_cv_cycle(inst):
@@ -193,9 +193,7 @@ def measure_single_cv_cycle(inst):
     cp_up = read_trace_cp(inst)
 
     # Sweep DOWN: v_max → v_min
-    set_dc_bias_sweep(inst, v_min, v_max, num_points,
-                      direction="DOWN")  # FIXED: swapped v_min and v_max due to direction = "DOWN" already present
-    single_sweep_and_wait(inst)
+    set_dc_bias_sweep(inst, v_min, v_max, num_points, direction="DOWN")
     inst.write("TRAC A")
     inst.write("AUTO")
     v_down = read_sweep_axis(inst)
@@ -345,10 +343,7 @@ def main():
         print("Instrument session closed.")
 
         # Show plots for first visual
-        plt.show()  # FIXED: for program stalling after eps vs f sweep, moved to end of program
-
-        # NOTE: program will not self-execute while plots are shown in GUI, this is by nature.
-
+        plt.show()  
 
 if __name__ == "__main__":
     main()
