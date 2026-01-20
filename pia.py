@@ -14,13 +14,14 @@ import numpy as np
 GPIB_ADDRESS = "GPIB0::24::INSTR"   # GPIB address for PIA
 
 # Frequency sweep settings (LOG sweep)
-FREQ_START_HZ = 1e3      # start frequency, Hz (>0 for LOG sweep)
-FREQ_STOP_HZ = 1e7       # stop frequency, Hz
+FREQ_START_HZ = 1e4      # start frequency, Hz (>0 for LOG sweep)
+FREQ_STOP_HZ = 1e6       # stop frequency, Hz
 NUM_POINTS = 201         # number of points in LOG sweep
 
 # DC bias options
+# TODO: safeguard frequency range for different biases, -40 to 40 V
 APPLY_DC_BIAS = True     # True = apply a fixed DC bias; False = no DC bias
-DC_BIAS_V = 0.0          # bias voltage (V) if APPLY_DC_BIAS = True
+DC_BIAS_V = 0         # bias voltage (V) if APPLY_DC_BIAS = True
 
 # =============================
 # Relevant VARIABLES for access

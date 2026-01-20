@@ -27,6 +27,7 @@ output_dir = os.path.join(script_dir, "output")
 measurementType = ["Impedance vs Theta", "Capacitance vs Tan Loss", "Dielectric Measurements"]
 
 def uniquify(path_string):
+    # TODO: date file naming
     """
     Generates a unique file path by appending an incrementing number 
     if the original file already exists.
@@ -44,12 +45,13 @@ def uniquify(path_string):
     return str(path)
 
 def ensure_output_dir(path):
-        """
-        Checks if the output directory exists, and creates it if not.
-        """
-        os.makedirs(path, exist_ok=True)
+    """
+    Checks if the output directory exists, and creates it if not.
+    """
+    os.makedirs(path, exist_ok=True)
 
 def save_csv(path, data, header):
+    # TODO: separate CSV folder
     """Save data array to a uniquified CSV file with header."""
     ensure_output_dir(output_dir)
     csv_path = uniquify(path)
@@ -59,6 +61,8 @@ def save_csv(path, data, header):
 
 def save_image(title, axis1_label, axis1, axis2_label, axis2, APPLY_DC_BIAS=False, DC_BIAS_V=0.0):
     """Save a semilog plot with optional DC bias in title and filename."""
+
+    # TODO : logarithmic AND linear plots as well, separate folder for images
     ensure_output_dir(output_dir)
     
     import matplotlib.pyplot as plt
@@ -81,4 +85,3 @@ def save_image(title, axis1_label, axis1, axis2_label, axis2, APPLY_DC_BIAS=Fals
     plt.savefig(image_path, dpi=300, bbox_inches="tight")
     plt.close()
     return image_path
-

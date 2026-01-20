@@ -145,7 +145,7 @@ def main():
                             csv_data,
                             "cycle_index, bias_V, Cp_F, eps_r"
                         )
-                        
+                        # TODO: Output plot for C-V butterfly
                         print("C–V measurement complete. Data saved to output folder.")
                     finally:
                         try:
@@ -161,6 +161,7 @@ def main():
                     freq_stop = float(input("Enter stop frequency (Hz) [default 1e6]: ") or "1e6")
                     freq_points = int(input("Enter number of frequency points [default 201]: ") or "201")
                     bias_voltage = float(input("Enter DC bias voltage (V) [default 0]: ") or "0")
+                    # TODO: ensure DC bias between -40 and 40
                     thickness_nm = float(input("Enter HZO thickness (nm) [default 10.0]: ") or "10.0")
                     diam_um = float(input("Enter electrode diameter (µm) [default 75.0]: ") or "75.0")
                     
@@ -199,8 +200,6 @@ def main():
                     dielectric_submenu = False
                 else:
                     print("Invalid choice. Please try again.")
-
-
 
 if __name__ == "__main__":
     main()
