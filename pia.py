@@ -1,6 +1,6 @@
 """
 Filename: pia.py
-Author: Chaitanya Sharma, Ethan Ruddell
+Author: Ethan Ruddell
 Date: 2025-01-20
 Description: Contains all constants and functions for PIA measurements.
 """
@@ -13,15 +13,28 @@ import numpy as np
 # =============================
 GPIB_ADDRESS = "GPIB0::24::INSTR"   # GPIB address for PIA
 
-# Frequency sweep settings (LOG sweep)
+# Default Frequency sweep settings (LOG sweep)
 FREQ_START_HZ = 1e4      # start frequency, Hz (>0 for LOG sweep)
 FREQ_STOP_HZ = 1e6       # stop frequency, Hz
 NUM_POINTS = 201         # number of points in LOG sweep
 
-# DC bias options
+# Default DC bias options
 # TODO: safeguard frequency range for different biases, -40 to 40 V
 APPLY_DC_BIAS = True     # True = apply a fixed DC bias; False = no DC bias
 DC_BIAS_V = 0         # bias voltage (V) if APPLY_DC_BIAS = True
+
+# =============================
+# Measurement Parameters
+# =============================
+# This dictionary stores the current measurement parameters
+# allowing for duplication across measurement types
+current_parameters = {
+    "freq_start_hz": FREQ_START_HZ,
+    "freq_stop_hz": FREQ_STOP_HZ,
+    "num_points": NUM_POINTS,
+    "apply_dc_bias": APPLY_DC_BIAS,
+    "dc_bias_v": DC_BIAS_V,
+}
 
 # =============================
 # Relevant VARIABLES for access
@@ -105,6 +118,10 @@ def configure_dc_bias(inst, apply_bias, dc_bias_v):
     """
     if apply_bias:
         # Set DC bias level and enable
+        if( dc_bias_v < -40.0 or dc_bias_v > 40.0 ):
+            print("Warning: DC Bias voltage out of range (-40V to 40V). Setting to 0V.")
+            dc_bias_v = 0.0
+            return
         inst.write(f"DCV {dc_bias_v}")
         inst.write("DCO ON")
     else:
@@ -154,14 +171,28 @@ def read_trace_main(inst, trace="A"):
     return main_vals
 
 
-def measure_cpd_vs_freq(inst):
+def measure_cpd_vs_freq(inst, freq_start=None, freq_stop=None, num_points=None):
     """
     Perform one LOG frequency sweep and measure:
         Cp(f) and D(f),
     and return frequency array and both traces.
+    
+    Args:
+        inst: VISA instrument instance
+        freq_start: Start frequency in Hz (uses FREQ_START_HZ if None)
+        freq_stop: Stop frequency in Hz (uses FREQ_STOP_HZ if None)
+        num_points: Number of points (uses NUM_POINTS if None)
     """
+    # Use provided parameters or fall back to module constants
+    if freq_start is None:
+        freq_start = FREQ_START_HZ
+    if freq_stop is None:
+        freq_stop = FREQ_STOP_HZ
+    if num_points is None:
+        num_points = NUM_POINTS
+    
     # Configure sweep
-    set_frequency_sweep(inst, FREQ_START_HZ, FREQ_STOP_HZ, NUM_POINTS)
+    set_frequency_sweep(inst, freq_start, freq_stop, num_points)
 
     # Start sweep and wait until done
     single_sweep_and_wait(inst)
@@ -176,14 +207,28 @@ def measure_cpd_vs_freq(inst):
     return freq_axis, cp_vals, d_vals
 
 
-def measure_impedance_vs_freq(inst):
+def measure_impedance_vs_freq(inst, freq_start=None, freq_stop=None, num_points=None):
     """
     Perform one LOG frequency sweep and measure:
         |Z|(f) and θ(f) (degrees),
     and return frequency array and both traces.
+    
+    Args:
+        inst: VISA instrument instance
+        freq_start: Start frequency in Hz (uses FREQ_START_HZ if None)
+        freq_stop: Stop frequency in Hz (uses FREQ_STOP_HZ if None)
+        num_points: Number of points (uses NUM_POINTS if None)
     """
+    # Use provided parameters or fall back to module constants
+    if freq_start is None:
+        freq_start = FREQ_START_HZ
+    if freq_stop is None:
+        freq_stop = FREQ_STOP_HZ
+    if num_points is None:
+        num_points = NUM_POINTS
+    
     # Configure sweep
-    set_frequency_sweep(inst, FREQ_START_HZ, FREQ_STOP_HZ, NUM_POINTS)
+    set_frequency_sweep(inst, freq_start, freq_stop, num_points)
 
     # Start sweep and wait until done
     single_sweep_and_wait(inst)
@@ -204,6 +249,102 @@ def setup():
     """
     inst = connect_4294a()
     return inst
+
+
+# =============================
+# Parameter Configuration and Duplication
+# =============================
+
+def get_frequency_parameters(use_last=None, freq_start=None, freq_stop=None, num_points=None):
+    """
+    Get and optionally update frequency sweep parameters.
+    
+    Args:
+        use_last: If True, use previously stored parameters. If None, prompt user.
+        freq_start: Start frequency in Hz (optional)
+        freq_stop: Stop frequency in Hz (optional)
+        num_points: Number of points (optional)
+    
+    Returns:
+        tuple: (freq_start, freq_stop, num_points)
+    """
+    global current_parameters
+    
+    if use_last:
+        freq_start = current_parameters["freq_start_hz"]
+        freq_stop = current_parameters["freq_stop_hz"]
+        num_points = current_parameters["num_points"]
+    else:
+        # Prompt user for parameters with defaults from current_parameters
+        freq_start_input = input(f"Enter start frequency (Hz) [default {current_parameters['freq_start_hz']:.2e}]: ").strip()
+        freq_start = float(freq_start_input) if freq_start_input else current_parameters["freq_start_hz"]
+        
+        freq_stop_input = input(f"Enter stop frequency (Hz) [default {current_parameters['freq_stop_hz']:.2e}]: ").strip()
+        freq_stop = float(freq_stop_input) if freq_stop_input else current_parameters["freq_stop_hz"]
+        
+        num_points_input = input(f"Enter number of points [default {current_parameters['num_points']}]: ").strip()
+        num_points = int(num_points_input) if num_points_input else current_parameters["num_points"]
+        
+        # Update current parameters for future duplication
+        current_parameters["freq_start_hz"] = freq_start
+        current_parameters["freq_stop_hz"] = freq_stop
+        current_parameters["num_points"] = num_points
+    
+    return freq_start, freq_stop, num_points
+
+
+def get_dc_bias_parameters(use_last=None, apply_bias=None, bias_voltage=None):
+    """
+    Get and optionally update DC bias parameters.
+    
+    Args:
+        use_last: If True, use previously stored parameters. If None, prompt user.
+        apply_bias: Boolean to apply DC bias (optional)
+        bias_voltage: DC bias voltage in V (optional)
+    
+    Returns:
+        tuple: (apply_bias, bias_voltage)
+    """
+    global current_parameters
+    
+    if use_last:
+        apply_bias = current_parameters["apply_dc_bias"]
+        bias_voltage = current_parameters["dc_bias_v"]
+    else:
+        # Prompt user for DC bias parameters
+        bias_input = input(f"Apply DC bias? [y/n] [default {'y' if current_parameters['apply_dc_bias'] else 'n'}]: ").strip().lower()
+        apply_bias = bias_input == 'y' if bias_input else current_parameters["apply_dc_bias"]
+        
+        if apply_bias:
+            bias_v_input = input(f"Enter DC bias voltage (V) [default {current_parameters['dc_bias_v']}]: ").strip()
+            bias_voltage = float(bias_v_input) if bias_v_input else current_parameters["dc_bias_v"]
+        else:
+            bias_voltage = 0.0
+        
+        # Update current parameters for future duplication
+        current_parameters["apply_dc_bias"] = apply_bias
+        current_parameters["dc_bias_v"] = bias_voltage
+    
+    return apply_bias, bias_voltage
+
+
+def prompt_for_parameter_duplication():
+    """
+    Ask user if they want to duplicate the last measurement parameters.
+    
+    Returns:
+        bool: True if user wants to duplicate, False otherwise
+    """
+    dup_input = input("Use last measurement parameters? (y/n): ").strip().lower()
+    return dup_input == 'y'
+
+
+def set_frequency_sweep_with_params(inst, freq_start, freq_stop, num_points):
+    """
+    Configure a LOG frequency sweep using provided parameters.
+    Wrapper around set_frequency_sweep with explicit parameters.
+    """
+    set_frequency_sweep(inst, freq_start, freq_stop, num_points)
 
 
 # =============================

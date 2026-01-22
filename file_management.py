@@ -14,10 +14,13 @@ from pathlib import Path
 # File name definitions
 
 # Get the path to the current script directory
-script_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+script_dir = Path(sys.argv[0]).resolve().parent
 
-# Name a new "output" folder in the script directory
-output_dir = os.path.join(script_dir, "output")
+# Default output folder lives one level up from the script directory
+default_output_dir = str((script_dir / ".." / "output").resolve())
+
+# Active output directory (may be overridden via CLI)
+output_dir = default_output_dir
 
 
 #=============================
@@ -50,10 +53,14 @@ def ensure_output_dir(path):
     """
     os.makedirs(path, exist_ok=True)
 
+def set_output_dir(path):
+    """Override the active output directory using an absolute, expanded path."""
+    global output_dir
+    output_dir = str(Path(path).expanduser().resolve())
+
 def save_csv(path, data, header):
-    # TODO: separate CSV folder
     """Save data array to a uniquified CSV file with header."""
-    ensure_output_dir(output_dir)
+    ensure_output_dir(os.path.join(output_dir, "csv"))
     csv_path = uniquify(path)
     print(f"Saving CSV to: {csv_path}")
     np.savetxt(csv_path, data, delimiter=",", header=header, comments="")
@@ -63,7 +70,7 @@ def save_image(title, axis1_label, axis1, axis2_label, axis2, APPLY_DC_BIAS=Fals
     """Save a semilog plot with optional DC bias in title and filename."""
 
     # TODO : logarithmic AND linear plots as well, separate folder for images
-    ensure_output_dir(output_dir)
+    ensure_output_dir(os.path.join(output_dir, "images"))
     
     import matplotlib.pyplot as plt
 
