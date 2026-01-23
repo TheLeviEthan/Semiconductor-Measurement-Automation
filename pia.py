@@ -1,7 +1,7 @@
 """
 Filename: pia.py
 Author: Ethan Ruddell
-Date: 2025-01-20
+Date: 2025-01-23
 Description: Contains all constants and functions for PIA measurements.
 """
 
@@ -19,7 +19,6 @@ FREQ_STOP_HZ = 1e6       # stop frequency, Hz
 NUM_POINTS = 201         # number of points in LOG sweep
 
 # Default DC bias options
-# TODO: safeguard frequency range for different biases, -40 to 40 V
 APPLY_DC_BIAS = True     # True = apply a fixed DC bias; False = no DC bias
 DC_BIAS_V = 0         # bias voltage (V) if APPLY_DC_BIAS = True
 

@@ -10,6 +10,8 @@ import os
 import sys
 import numpy as np
 from pathlib import Path
+import matplotlib.pyplot as plt
+
 
 # File name definitions
 
@@ -69,10 +71,9 @@ def save_csv(path, data, header):
 def save_image(title, axis1_label, axis1, axis2_label, axis2, APPLY_DC_BIAS=False, DC_BIAS_V=0.0):
     """Save a semilog plot with optional DC bias in title and filename."""
 
-    # TODO : logarithmic AND linear plots as well, separate folder for images
+    # TODO : logarithmic AND linear plots as well
     ensure_output_dir(os.path.join(output_dir, "images"))
     
-    import matplotlib.pyplot as plt
 
     # Augment title with DC bias BEFORE using it in filename/plot
     if APPLY_DC_BIAS:
@@ -87,7 +88,26 @@ def save_image(title, axis1_label, axis1, axis2_label, axis2, APPLY_DC_BIAS=Fals
     plt.title(title_with_bias)
     plt.grid(True, which="both")
 
-    image_path = uniquify(os.path.join(output_dir, f"{title_with_bias}_plot.png"))
+    image_path = uniquify(os.path.join(output_dir, "images", f"{title_with_bias}_plot.png"))
+    print(f"Saved image to: {image_path}")
+    plt.savefig(image_path, dpi=300, bbox_inches="tight")
+    plt.close()
+    return image_path
+
+def save_cycle_plot(title, x_label, y_label, cycles_x, cycles_y, base_filename):
+    """Save multi-cycle linear plot for stacked sweeps with unique filenames."""
+    ensure_output_dir(os.path.join(output_dir, "images"))
+
+    plt.figure()
+    for idx, (x_vals, y_vals) in enumerate(zip(cycles_x, cycles_y), start=1):
+        plt.plot(x_vals, y_vals, "-o", markersize=3, label=f"Cycle {idx}")
+    plt.xlabel(x_label)
+    plt.ylabel(y_label)
+    plt.title(title)
+    plt.grid(True)
+    plt.legend()
+
+    image_path = uniquify(os.path.join(output_dir, "images", base_filename))
     print(f"Saved image to: {image_path}")
     plt.savefig(image_path, dpi=300, bbox_inches="tight")
     plt.close()

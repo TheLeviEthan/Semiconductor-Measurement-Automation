@@ -1,15 +1,13 @@
 """
 Filename: main.py
 Author: Ethan Ruddell
-Date: 2025-01-20
+Date: 2025-01-23
 Description: Implements CLI for automating semiconductor measurements using
 the Keysight 4294A Precision Impedance Analyzer and a DC bias source.
 """
 
 import os
-import sys
 import argparse
-import pyvisa
 import numpy as np
 import pia
 import file_management
@@ -184,7 +182,24 @@ def main():
                         csv_data,
                         "cycle_index, bias_V, Cp_F, eps_r"
                     )
-                    # TODO: Output plot for C-V butterfly
+
+                    # Save butterfly plots
+                    file_management.save_cycle_plot(
+                        "C-V Butterfly: Cp vs Voltage",
+                        "Bias Voltage (V)",
+                        "Cp (F)",
+                        all_v_cycles,
+                        all_cp_cycles,
+                        "cv_butterfly_cp.png",
+                    )
+                    file_management.save_cycle_plot(
+                        "C-V Butterfly: eps_r vs Voltage",
+                        "Bias Voltage (V)",
+                        "Dielectric constant eps_r",
+                        all_v_cycles,
+                        all_eps_cycles,
+                        "cv_butterfly_eps_r.png",
+                    )
                     print("C–V measurement complete. Data saved to output folder.")
                 finally:
                     try:
