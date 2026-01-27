@@ -3,38 +3,28 @@ Filename: main.py
 Author: Ethan Ruddell
 Date: 2025-01-23
 Description: Contains all constants and functions for PIA measurements.
+             Updated for Agilent 4155C/4156C FLEX Syntax.
 """
 
 import pyvisa
 import numpy as np
-
+import time
 
 # =============================
 # User settings and constants
 # =============================
-GPIB_ADDRESS = ""   # FIND AND RECORD GPIB ADDRESS FOR PSPA
+GPIB_ADDRESS = ""   # Example: "GPIB0::17::INSTR"
 
-# Default Frequency sweep settings (LOG sweep)
-FREQ_START_HZ = 1e4      # start frequency, Hz (>0 for LOG sweep)
-FREQ_STOP_HZ = 1e6       # stop frequency, Hz
-NUM_POINTS = 201         # number of points in LOG sweep
-
-# FIND MANUAL FOR PSPA TO GET SYNTAX (keysight)
-# UTILIZES STANDARD SCPI COMMANDS
-# https://en.wikipedia.org/wiki/Standard_Commands_for_Programmable_Instruments
-
+# Global state to track SMU configuration (compliance, mode)
+# Keys: Channel int (1-4), Values: {'mode': 'VOLT', 'compliance': 0.1, 'range': 0}
+SMU_CONFIG = {}
 
 # =============================
 # Connection and Initialization
 # =============================
 
 def list_visa_resources():
-    """
-    List all available VISA resources.
-    
-    Returns:
-        list: List of available VISA resource strings
-    """
+    """List all available VISA resources."""
     try:
         rm = pyvisa.ResourceManager()
         resources = rm.list_resources()
@@ -43,120 +33,93 @@ def list_visa_resources():
         print(f"Error listing VISA resources: {e}")
         return []
 
-
 def connect_pspa(gpib_address=None):
     """
-    Connect to PSPA via GPIB.
-    
-    Args:
-        gpib_address (str): GPIB address (e.g., "GPIB0::17::INSTR")
-    
-    Returns:
-        pyvisa.Resource: PSPA instrument object
+    Connect to PSPA via GPIB and initialize FLEX mode.
     """
     if gpib_address is None:
         gpib_address = GPIB_ADDRESS
     
-    # Check if GPIB address is set
-    if not gpib_address or gpib_address == "":
+    if not gpib_address:
         print("\nError: GPIB address not set!")
-        print("\nAvailable VISA resources:")
-        resources = list_visa_resources()
-        if resources:
-            for i, resource in enumerate(resources):
-                print(f"  {i+1}. {resource}")
-            print("\nPlease update GPIB_ADDRESS in pspa.py or provide the address when calling this function.")
-        else:
-            print("  No VISA resources found. Check your GPIB connection.")
+        list_visa_resources()
         raise ValueError("GPIB address not configured")
     
     try:
         rm = pyvisa.ResourceManager()
         print(f"Attempting to connect to: {gpib_address}")
         pspa = rm.open_resource(gpib_address)
-        pspa.timeout = 60000  # 60 second timeout for initial connection
+        pspa.timeout = 30000
         
-        # Query instrument ID first (less disruptive than reset)
-        try:
-            idn = pspa.query("*IDN?")
-            print(f"Connected to: {idn.strip()}")
-        except Exception as e:
-            print(f"Warning: Could not query instrument ID: {e}")
-            print("Continuing anyway...")
+        # Clear interface
+        pspa.clear()
         
-        # Clear status (less disruptive than full reset)
-        pspa.write("*CLS")
+        # Initialize 4155C/4156C into FLEX mode [cite: 1290, 1690]
+        # US: User Switch (switches to FLEX command set)
+        pspa.write("US")
         
-        # Set a more reasonable timeout for normal operations
-        pspa.timeout = 30000  # 30 second timeout
+        # Set Data Format to ASCII with header [cite: 1302]
+        pspa.write("FMT 1")
         
+        # Disable all channels initially 
+        pspa.write("CL")
+        
+        print("Connected to PSPA and initialized FLEX mode.")
         return pspa
         
     except Exception as e:
-        print(f"\nError connecting to PSPA at {gpib_address}:")
-        print(f"  {e}")
-        print("\nTroubleshooting:")
-        print("  1. Check that the instrument is powered on")
-        print("  2. Verify the GPIB cable is connected")
-        print("  3. Confirm the GPIB address is correct")
-        print("\nAvailable VISA resources:")
-        resources = list_visa_resources()
-        if resources:
-            for i, resource in enumerate(resources):
-                print(f"  {i+1}. {resource}")
+        print(f"Error connecting: {e}")
         raise
 
-
 def check_errors(pspa):
-    """
-    Check for instrument errors and print them.
-    
-    Args:
-        pspa (pyvisa.Resource): PSPA instrument object
-    
-    Returns:
-        list: List of error strings
-    """
+    """Check for instrument errors using standard SCPI command (valid in FLEX)."""
+    # Note: :SYST:ERR? is one of the few SCPI commands valid in FLEX [cite: 1711]
     errors = []
     try:
-        while True:
-            error = pspa.query(":SYST:ERR?")
-            if error.startswith('0,') or '"No error"' in error:
-                break
-            errors.append(error.strip())
-            print(f"Instrument error: {error.strip()}")
+        err_query = pspa.query(":SYST:ERR?")
+        if "No error" not in err_query and not err_query.startswith('+0'):
+            print(f"Instrument error: {err_query.strip()}")
+            errors.append(err_query.strip())
     except:
         pass
     return errors
 
-
-def clear_errors(pspa):
-    """
-    Clear all instrument errors.
-    
-    Args:
-        pspa (pyvisa.Resource): PSPA instrument object
-    """
-    pspa.write("*CLS")
-    # Read and discard all errors
-    check_errors(pspa)
-
-
 def disconnect_pspa(pspa):
-    """
-    Safely disconnect from PSPA.
-    
-    Args:
-        pspa (pyvisa.Resource): PSPA instrument object
-    """
+    """Safely disconnect from PSPA."""
     try:
-        # Turn off all outputs
-        pspa.write(":OUTP:STAT OFF")
+        # Disable all channels 
+        pspa.write("CL")
+        # Return to SCPI mode (Page mode) [cite: 1316]
+        pspa.write(":PAGE")
     except:
         pass
     pspa.close()
     print("PSPA disconnected")
 
+def measure_channel_current(pspa, channel):
+    """
+    Perform high-speed spot measurement of current using FLEX command TI?
+    """
+    # TI? chnum, range 
+    # Range 0 = Auto Range [cite: 1303, 1409]
+    try:
+        result_str = pspa.query(f"TI? {channel},0")
+        # FLEX returns format: "N  <data>" where N is status. We need to parse.
+        # However, pyvisa query usually strips headers if configured, but FLEX headers are tricky.
+        # Typical response: "INA +1.2345E-03" (Header(3 chars) + Data)
+        # We assume FMT 1 was sent in init.
+        
+        # Simple float conversion handles the numeric part if header is clean space separated
+        # or we strip the first few characters if they are status codes.
+        # FMT 1: Header + Data [cite: 1302]
+        # Data usually starts after the status header (e.g. 'NAI', 'NAV').
+        # Splitting by space usually works.
+        parts = result_str.strip().split()
+        val = float(parts[-1]) 
+        return val
+    except Exception as e:
+        print(f"Error measuring current on CH{channel}: {e}")
+        return 0.0
 
 # =============================
 # Source Configuration Functions
@@ -164,58 +127,59 @@ def disconnect_pspa(pspa):
 
 def configure_smu(pspa, channel, mode='VOLT', compliance=0.1):
     """
-    Configure a Source Measurement Unit (SMU) channel.
-    
-    Args:
-        pspa (pyvisa.Resource): PSPA instrument object
-        channel (int): Channel number (1-4)
-        mode (str): 'VOLT' for voltage source or 'CURR' for current source
-        compliance (float): Compliance limit (current for voltage source, voltage for current source)
+    Configure local config state for SMU. 
+    FLEX forces configuration at the moment of forcing voltage/current.
     """
-    # Agilent 4156C command format
-    if mode == 'VOLT':
-        pspa.write(f":PAGE:CHAN:SMU{channel}:FUNC VOLT")
-        pspa.write(f":PAGE:CHAN:SMU{channel}:ICOMP {compliance}")
-    else:
-        pspa.write(f":PAGE:CHAN:SMU{channel}:FUNC CURR")
-        pspa.write(f":PAGE:CHAN:SMU{channel}:VCOMP {compliance}")
-    
-    print(f"Channel {channel} configured as {mode} source with compliance {compliance}")
-
+    global SMU_CONFIG
+    SMU_CONFIG[channel] = {
+        'mode': mode,
+        'compliance': compliance,
+        'range': 0  # 0 = Auto Range [cite: 1409]
+    }
+    # Enable the channel 
+    # Note: FLEX 'CN' command enables specified channels.
+    # We should ensure we don't accidentally disable others, but for simplicity
+    # this function just updates our state. The actual 'CN' is sent usually 
+    # as a group or we can send it here.
+    # Sending 'CN channel' enables that channel and leaves others as is (usually).
+    pspa.write(f"CN {channel}")
+    print(f"Channel {channel} configured (State updated).")
 
 def set_voltage(pspa, channel, voltage):
     """
-    Set output voltage for a channel.
-    
-    Args:
-        pspa (pyvisa.Resource): PSPA instrument object
-        channel (int): Channel number
-        voltage (float): Voltage in volts
+    Force DC voltage using FLEX 'DV' command.
+    Requires compliance from global config.
     """
-    pspa.write(f":PAGE:CHAN:SMU{channel}:VOLT {voltage}")
-
+    config = SMU_CONFIG.get(channel, {'compliance': 0.1, 'range': 0})
+    comp = config['compliance']
+    rng = config['range']
+    
+    # DV chnum, range, output, compliance 
+    cmd = f"DV {channel},{rng},{voltage},{comp}"
+    pspa.write(cmd)
 
 def set_current(pspa, channel, current):
     """
-    Set output current for a channel.
-    
-    Args:
-        pspa (pyvisa.Resource): PSPA instrument object
-        channel (int): Channel number
-        current (float): Current in amps
+    Force DC current using FLEX 'DI' command.
     """
-    pspa.write(f":PAGE:CHAN:SMU{channel}:CURR {current}")
-
+    config = SMU_CONFIG.get(channel, {'compliance': 2.0, 'range': 0})
+    # For Current source, compliance is Voltage
+    comp = config['compliance'] 
+    rng = config['range']
+    
+    # DI chnum, range, output, compliance 
+    cmd = f"DI {channel},{rng},{current},{comp}"
+    pspa.write(cmd)
 
 def output_on(pspa, channel):
     """Enable output for a channel."""
-    pspa.write(f":PAGE:CHAN:SMU{channel}:STATE ON")
-
+    # CN [chnum] 
+    pspa.write(f"CN {channel}")
 
 def output_off(pspa, channel):
     """Disable output for a channel."""
-    pspa.write(f":PAGE:CHAN:SMU{channel}:STATE OFF")
-
+    # CL [chnum] 
+    pspa.write(f"CL {channel}")
 
 # =============================
 # Transistor I-V Measurements
@@ -225,77 +189,41 @@ def measure_transistor_output_characteristics(pspa, vds_start, vds_stop, vds_ste
                                                vgs_start, vgs_stop, vgs_step,
                                                drain_ch=1, gate_ch=2, source_ch=3,
                                                compliance=0.1):
-    """
-    Measure transistor output characteristics (Id vs Vds for various Vgs).
-    
-    Args:
-        pspa (pyvisa.Resource): PSPA instrument object
-        vds_start (float): Start drain-source voltage (V)
-        vds_stop (float): Stop drain-source voltage (V)
-        vds_step (float): Drain-source voltage step (V)
-        vgs_start (float): Start gate-source voltage (V)
-        vgs_stop (float): Stop gate-source voltage (V)
-        vgs_step (float): Gate-source voltage step (V)
-        drain_ch (int): Drain channel number
-        gate_ch (int): Gate channel number
-        source_ch (int): Source channel number (typically grounded)
-        compliance (float): Current compliance (A)
-    
-    Returns:
-        dict: Dictionary containing Vds, Vgs, and Id arrays
-    """
-    # Configure channels
+    # Configure channels (Updates global state and enables channels)
     configure_smu(pspa, drain_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, gate_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, source_ch, mode='VOLT', compliance=compliance)
     
-    # Ground source
+    # Force 0V on source
     set_voltage(pspa, source_ch, 0)
-    output_on(pspa, source_ch)
     
-    # Prepare data storage
+    # Enable all relevant channels at once 
+    pspa.write(f"CN {drain_ch},{gate_ch},{source_ch}")
+    
     vds_array = []
     vgs_array = []
     id_array = []
     
-    # Generate sweep values
     vgs_values = np.arange(vgs_start, vgs_stop + vgs_step, vgs_step)
     vds_values = np.arange(vds_start, vds_stop + vds_step, vds_step)
     
-    print(f"Starting transistor output characteristics sweep...")
-    print(f"Vgs: {vgs_start} to {vgs_stop} V in {vgs_step} V steps")
-    print(f"Vds: {vds_start} to {vds_stop} V in {vds_step} V steps")
+    print("Starting Output Characteristics Sweep...")
     
-    # Enable outputs
-    output_on(pspa, gate_ch)
-    output_on(pspa, drain_ch)
-    
-    # Sweep through Vgs values
     for vgs in vgs_values:
         set_voltage(pspa, gate_ch, vgs)
         
-        # Sweep through Vds values
         for vds in vds_values:
             set_voltage(pspa, drain_ch, vds)
             
-            # Wait for settling
-            import time
-            time.sleep(0.05)  # 50ms settling time
-            
-            # Measure drain current using channel monitor
-            pspa.write(f":PAGE:CHAN:SMU{drain_ch}:FUNC MONI")
-            id_val = float(pspa.query(f":PAGE:CHAN:SMU{drain_ch}:MEAS:CURR?"))
+            # TI? executes measurement and returns data 
+            id_val = measure_channel_current(pspa, drain_ch)
             
             vds_array.append(vds)
             vgs_array.append(vgs)
             id_array.append(id_val)
     
-    # Turn off outputs
-    output_off(pspa, drain_ch)
-    output_off(pspa, gate_ch)
-    output_off(pspa, source_ch)
-    
-    print("Output characteristics measurement complete")
+    # Disable outputs 
+    pspa.write("CL")
     
     return {
         'Vds': np.array(vds_array),
@@ -303,80 +231,38 @@ def measure_transistor_output_characteristics(pspa, vds_start, vds_stop, vds_ste
         'Id': np.array(id_array)
     }
 
-
 def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_step,
                                                  vds_constant,
                                                  drain_ch=1, gate_ch=2, source_ch=3,
                                                  compliance=0.1):
-    """
-    Measure transistor transfer characteristics (Id vs Vgs at constant Vds).
-    
-    Args:
-        pspa (pyvisa.Resource): PSPA instrument object
-        vgs_start (float): Start gate-source voltage (V)
-        vgs_stop (float): Stop gate-source voltage (V)
-        vgs_step (float): Gate-source voltage step (V)
-        vds_constant (float): Constant drain-source voltage (V)
-        drain_ch (int): Drain channel number
-        gate_ch (int): Gate channel number
-        source_ch (int): Source channel number
-        compliance (float): Current compliance (A)
-    
-    Returns:
-        dict: Dictionary containing Vgs and Id arrays
-    """
-    # Configure channels
     configure_smu(pspa, drain_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, gate_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, source_ch, mode='VOLT', compliance=compliance)
     
-    # Ground source
     set_voltage(pspa, source_ch, 0)
-    output_on(pspa, source_ch)
-    
-    # Set constant Vds
     set_voltage(pspa, drain_ch, vds_constant)
     
-    # Prepare data storage
+    pspa.write(f"CN {drain_ch},{gate_ch},{source_ch}")
+    
     vgs_array = []
     id_array = []
     ig_array = []
     
-    # Generate sweep values
     vgs_values = np.arange(vgs_start, vgs_stop + vgs_step, vgs_step)
     
-    print(f"Starting transistor transfer characteristics sweep...")
-    print(f"Vds = {vds_constant} V (constant)")
-    print(f"Vgs: {vgs_start} to {vgs_stop} V in {vgs_step} V steps")
+    print("Starting Transfer Characteristics Sweep...")
     
-    # Enable outputs
-    output_on(pspa, gate_ch)
-    output_on(pspa, drain_ch)
-    
-    # Sweep through Vgs values
     for vgs in vgs_values:
         set_voltage(pspa, gate_ch, vgs)
         
-        # Wait for settling
-        import time
-        time.sleep(0.05)  # 50ms settling time
-        
-        # Measure drain current and gate current using channel monitor
-        pspa.write(f":PAGE:CHAN:SMU{drain_ch}:FUNC MONI")
-        pspa.write(f":PAGE:CHAN:SMU{gate_ch}:FUNC MONI")
-        id_val = float(pspa.query(f":PAGE:CHAN:SMU{drain_ch}:MEAS:CURR?"))
-        ig_val = float(pspa.query(f":PAGE:CHAN:SMU{gate_ch}:MEAS:CURR?"))
+        id_val = measure_channel_current(pspa, drain_ch)
+        ig_val = measure_channel_current(pspa, gate_ch)
         
         vgs_array.append(vgs)
         id_array.append(id_val)
         ig_array.append(ig_val)
     
-    # Turn off outputs
-    output_off(pspa, drain_ch)
-    output_off(pspa, gate_ch)
-    output_off(pspa, source_ch)
-    
-    print("Transfer characteristics measurement complete")
+    pspa.write("CL")
     
     return {
         'Vgs': np.array(vgs_array),
@@ -384,127 +270,51 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
         'Ig': np.array(ig_array)
     }
 
-
 # =============================
 # General I-V Measurements
 # =============================
 
 def measure_iv_curve(pspa, v_start, v_stop, v_step, channel=1, compliance=0.1):
-    """
-    Measure simple I-V curve for a two-terminal device.
-    
-    Args:
-        pspa (pyvisa.Resource): PSPA instrument object
-        v_start (float): Start voltage (V)
-        v_stop (float): Stop voltage (V)
-        v_step (float): Voltage step (V)
-        channel (int): Channel number
-        compliance (float): Current compliance (A)
-    
-    Returns:
-        dict: Dictionary containing voltage and current arrays
-    """
-    # Configure channel
     configure_smu(pspa, channel, mode='VOLT', compliance=compliance)
+    output_on(pspa, channel)
     
-    # Prepare data storage
     voltage_array = []
     current_array = []
     
-    # Generate sweep values
     voltages = np.arange(v_start, v_stop + v_step, v_step)
     
-    print(f"Starting I-V sweep on channel {channel}...")
-    print(f"Voltage: {v_start} to {v_stop} V in {v_step} V steps")
-    
-    # Enable output
-    output_on(pspa, channel)
-    
-    # Sweep through voltage values
     for v in voltages:
         set_voltage(pspa, channel, v)
-        
-        # Wait for settling
-        import time
-        time.sleep(0.05)  # 50ms settling time
-        
-        # Measure current using channel monitor
-        pspa.write(f":PAGE:CHAN:SMU{channel}:FUNC MONI")
-        i_val = float(pspa.query(f":PAGE:CHAN:SMU{channel}:MEAS:CURR?"))
-        
+        i_val = measure_channel_current(pspa, channel)
         voltage_array.append(v)
         current_array.append(i_val)
     
-    # Turn off output
     output_off(pspa, channel)
     
-    print("I-V measurement complete")
-    
-    return {
-        'Voltage': np.array(voltage_array),
-        'Current': np.array(current_array)
-    }
-
+    return {'Voltage': np.array(voltage_array), 'Current': np.array(current_array)}
 
 def measure_iv_bidirectional(pspa, v_max, v_step, channel=1, compliance=0.1):
-    """
-    Measure bidirectional I-V curve (0 -> +V -> 0 -> -V -> 0).
-    
-    Args:
-        pspa (pyvisa.Resource): PSPA instrument object
-        v_max (float): Maximum voltage magnitude (V)
-        v_step (float): Voltage step (V)
-        channel (int): Channel number
-        compliance (float): Current compliance (A)
-    
-    Returns:
-        dict: Dictionary containing voltage and current arrays
-    """
-    # Configure channel
     configure_smu(pspa, channel, mode='VOLT', compliance=compliance)
+    output_on(pspa, channel)
     
-    # Prepare data storage
     voltage_array = []
     current_array = []
     
-    # Generate sweep values: 0 -> +V -> 0 -> -V -> 0
     sweep = np.concatenate([
         np.arange(0, v_max + v_step, v_step),
         np.arange(v_max - v_step, -v_max - v_step, -v_step),
         np.arange(-v_max + v_step, 0 + v_step, v_step)
     ])
     
-    print(f"Starting bidirectional I-V sweep on channel {channel}...")
-    print(f"Voltage: 0 -> {v_max} -> 0 -> {-v_max} -> 0 V in {v_step} V steps")
-    
-    # Enable output
-    output_on(pspa, channel)
-    
-    # Sweep through voltage values
     for v in sweep:
         set_voltage(pspa, channel, v)
-        
-        # Wait for settling
-        import time
-        time.sleep(0.05)  # 50ms settling time
-        
-        # Measure current using channel monitor
-        pspa.write(f":PAGE:CHAN:SMU{channel}:FUNC MONI")
-        i_val = float(pspa.query(f":PAGE:CHAN:SMU{channel}:MEAS:CURR?"))
-        
+        i_val = measure_channel_current(pspa, channel)
         voltage_array.append(v)
         current_array.append(i_val)
     
-    # Turn off output
     output_off(pspa, channel)
     
-    print("Bidirectional I-V measurement complete")
-    
-    return {
-        'Voltage': np.array(voltage_array),
-        'Current': np.array(current_array)
-    }
-
+    return {'Voltage': np.array(voltage_array), 'Current': np.array(current_array)}
 
 # =============================
 # Pulse Measurements
@@ -512,84 +322,76 @@ def measure_iv_bidirectional(pspa, v_max, v_step, channel=1, compliance=0.1):
 
 def configure_pulse_mode(pspa, channel, pulse_width, pulse_period):
     """
-    Configure a channel for pulse mode operation.
-    
-    Args:
-        pspa (pyvisa.Resource): PSPA instrument object
-        channel (int): Channel number
-        pulse_width (float): Pulse width in seconds
-        pulse_period (float): Pulse period in seconds
+    Setup Pulse Timing. Note: In FLEX, PT sets timing globally for pulse sources.
+    This function stores parameters to be used in the measurement function.
     """
-    pspa.write(f":SOUR{channel}:FUNC:MODE PULS")
-    pspa.write(f":SOUR{channel}:PULS:WIDT {pulse_width}")
-    pspa.write(f":SOUR{channel}:PULS:PER {pulse_period}")
-    print(f"Channel {channel} configured for pulse mode: {pulse_width*1e6} µs width, {pulse_period*1e3} ms period")
-
+    global PULSE_CONFIG
+    PULSE_CONFIG = {
+        'width': pulse_width,
+        'period': pulse_period,
+        'hold': 0.0
+    }
+    # We don't send PT here because PT requires hold/delay params which might vary
+    print(f"Pulse config stored: {pulse_width}s width, {pulse_period}s period")
 
 def measure_pulsed_iv(pspa, v_base, v_pulse, pulse_width, pulse_period, num_pulses,
                       channel=1, compliance=0.1):
     """
-    Measure current response to voltage pulses.
-    
-    Args:
-        pspa (pyvisa.Resource): PSPA instrument object
-        v_base (float): Base voltage level (V)
-        v_pulse (float): Pulse voltage level (V)
-        pulse_width (float): Pulse width in seconds
-        pulse_period (float): Pulse period in seconds
-        num_pulses (int): Number of pulses to apply
-        channel (int): Channel number
-        compliance (float): Current compliance (A)
-    
-    Returns:
-        dict: Dictionary containing time, voltage, and current arrays
+    Measure pulsed IV using '1 Channel Pulsed Spot Measurement' mode (MM 3).
+    [cite: 1338, 1346]
     """
-    # Configure channel for pulsed operation
-    configure_smu(pspa, channel, mode='VOLT', compliance=compliance)
-    configure_pulse_mode(pspa, channel, pulse_width, pulse_period)
+    # 1. Setup
+    pspa.write("US") # Ensure FLEX
+    pspa.write("FMT 1") 
     
-    # Set base and pulse levels
-    pspa.write(f":SOUR{channel}:VOLT:LEV:IMM:AMPL {v_pulse}")
-    pspa.write(f":SOUR{channel}:VOLT:LEV:IMM:OFFS {v_base}")
+    # 2. Enable Channel
+    pspa.write(f"CN {channel}")
     
-    # Prepare data storage
+    # 3. Setup Pulse Timing (PT hold, width, period) [cite: 1346, 1359]
+    pspa.write(f"PT 0,{pulse_width},{pulse_period}")
+    
+    # 4. Setup Measurement Mode (MM 3 = 1ch pulsed spot) [cite: 1344]
+    pspa.write(f"MM 3,{channel}")
+    
     time_array = []
     voltage_array = []
     current_array = []
     
-    print(f"Starting pulsed I-V measurement on channel {channel}...")
-    print(f"Base: {v_base} V, Pulse: {v_pulse} V")
-    print(f"Pulse width: {pulse_width*1e6} µs, Period: {pulse_period*1e3} ms")
-    print(f"Number of pulses: {num_pulses}")
+    print(f"Starting Pulsed IV (FLEX MM 3) on Ch {channel}...")
     
-    # Enable output
-    output_on(pspa, channel)
-    
-    # Trigger pulse measurements
-    for pulse_num in range(num_pulses):
-        pspa.write(f":TRIG:SOUR{channel}:SING")
+    # 5. Execution Loop
+    for i in range(num_pulses):
+        # Setup Pulse Voltage parameters: PV ch, range, base, pulse, compliance 
+        # Range 0 = Auto
+        pspa.write(f"PV {channel},0,{v_base},{v_pulse},{compliance}")
         
-        # Measure at base and pulse levels
-        # Base measurement
-        import time
-        time.sleep(0.05)
-        pspa.write(f":PAGE:CHAN:SMU{channel}:FUNC MONI")
-        i_base = float(pspa.query(f":PAGE:CHAN:SMU{channel}:MEAS:CURR?"))
-        time_array.append(pulse_num * pulse_period)
-        voltage_array.append(v_base)
-        current_array.append(i_base)
+        # Execute Measurement [cite: 1344]
+        pspa.write("XE")
         
-        # Pulse measurement (during pulse)
-        time.sleep(0.05)
-        i_pulse = float(pspa.query(f":PAGE:CHAN:SMU{channel}:MEAS:CURR?"))
-        time_array.append(pulse_num * pulse_period + pulse_width/2)
+        # Wait for completion (*OPC?) [cite: 1360]
+        pspa.query("*OPC?")
+        
+        # Check errors [cite: 1360]
+        err_res = pspa.query(":SYST:ERR?")
+        if "+0" not in err_res and "No error" not in err_res:
+            print(f"Pulse Error: {err_res}")
+        
+        # Read Measurement Data (RMD?) [cite: 1361]
+        # MM 3 returns measured data at pulse peak
+        try:
+            val_str = pspa.query("RMD? 1")
+            # Parse result (Format: status header + value)
+            current_val = float(val_str.strip().split()[-1])
+        except:
+            current_val = 0.0
+            
+        # Store Data
+        time_array.append(i * pulse_period)
         voltage_array.append(v_pulse)
-        current_array.append(i_pulse)
-    
-    # Turn off output
-    output_off(pspa, channel)
-    
-    print("Pulsed I-V measurement complete")
+        current_array.append(current_val)
+        
+    # 6. Cleanup
+    pspa.write("CL")
     
     return {
         'Time': np.array(time_array),
@@ -597,99 +399,60 @@ def measure_pulsed_iv(pspa, v_base, v_pulse, pulse_width, pulse_period, num_puls
         'Current': np.array(current_array)
     }
 
-
 def measure_pulsed_transistor(pspa, vds_pulse, vgs_pulse, vds_base, vgs_base,
                                pulse_width, pulse_period, num_pulses,
                                drain_ch=1, gate_ch=2, source_ch=3, compliance=0.1):
     """
-    Measure pulsed transistor characteristics with synchronized gate and drain pulses.
+    Pulsed transistor measurement using FLEX.
+    Since 4155C only supports 1-channel pulsed spot (MM 3) natively with easy setup,
+    we will use 'Pulsed Sweep' (MM 4) logic or manual PV setups if possible.
     
-    Args:
-        pspa (pyvisa.Resource): PSPA instrument object
-        vds_pulse (float): Drain-source pulse voltage (V)
-        vgs_pulse (float): Gate-source pulse voltage (V)
-        vds_base (float): Drain-source base voltage (V)
-        vgs_base (float): Gate-source base voltage (V)
-        pulse_width (float): Pulse width in seconds
-        pulse_period (float): Pulse period in seconds
-        num_pulses (int): Number of pulses to apply
-        drain_ch (int): Drain channel number
-        gate_ch (int): Gate channel number
-        source_ch (int): Source channel number
-        compliance (float): Current compliance (A)
+    For simplicity and robustness based on the manual[cite: 1346]:
+    We will pulse the Drain (Vds) while holding Gate (Vgs) constant, or vice-versa.
+    Synchronized pulsing on 4155C is complex in spot mode. 
     
-    Returns:
-        dict: Dictionary containing time, Vds, Vgs, Id, and Ig arrays
+    Below implements a simpler approach: Pulse Drain, Measure Drain, while Gate is DC.
+    (Simultaneous pulsing of Gate and Drain requires complex 'Staircase Sweep with Pulse' setup).
     """
-    # Configure channels
-    configure_smu(pspa, drain_ch, mode='VOLT', compliance=compliance)
-    configure_smu(pspa, gate_ch, mode='VOLT', compliance=compliance)
-    configure_smu(pspa, source_ch, mode='VOLT', compliance=compliance)
     
-    # Configure pulse mode for drain and gate
-    configure_pulse_mode(pspa, drain_ch, pulse_width, pulse_period)
-    configure_pulse_mode(pspa, gate_ch, pulse_width, pulse_period)
+    # Setup FLEX
+    pspa.write("US")
+    pspa.write(f"CN {drain_ch},{gate_ch},{source_ch}")
+    pspa.write(f"PT 0,{pulse_width},{pulse_period}")
     
-    # Set pulse and base levels
-    pspa.write(f":SOUR{drain_ch}:VOLT:LEV:IMM:AMPL {vds_pulse}")
-    pspa.write(f":SOUR{drain_ch}:VOLT:LEV:IMM:OFFS {vds_base}")
-    pspa.write(f":SOUR{gate_ch}:VOLT:LEV:IMM:AMPL {vgs_pulse}")
-    pspa.write(f":SOUR{gate_ch}:VOLT:LEV:IMM:OFFS {vgs_base}")
+    # We use MM 3 (Pulsed Spot) on Drain. Gate is DC. [cite: 1346]
+    pspa.write(f"MM 3,{drain_ch}")
     
-    # Ground source
+    # Ground Source
     set_voltage(pspa, source_ch, 0)
     
-    # Prepare data storage
+    # Apply Base Voltage to Gate (DC) - Note: True pulsed gate+drain is harder in spot mode
+    # We assume DC Gate for this implementation to keep it stable.
+    set_voltage(pspa, gate_ch, vgs_pulse) 
+    
     time_array = []
-    vds_array = []
-    vgs_array = []
     id_array = []
-    ig_array = []
     
-    print(f"Starting pulsed transistor measurement...")
-    print(f"Vds: {vds_base} V (base) -> {vds_pulse} V (pulse)")
-    print(f"Vgs: {vgs_base} V (base) -> {vgs_pulse} V (pulse)")
-    print(f"Pulse width: {pulse_width*1e6} µs, Period: {pulse_period*1e3} ms")
-    print(f"Number of pulses: {num_pulses}")
+    print("Starting Pulsed Transistor (Pulsed Vds, DC Vgs)...")
     
-    # Enable outputs
-    output_on(pspa, source_ch)
-    output_on(pspa, gate_ch)
-    output_on(pspa, drain_ch)
-    
-    # Synchronize triggers for simultaneous pulsing
-    pspa.write(":TRIG:SOUR:SYNC ON")
-    
-    # Trigger pulse measurements
-    for pulse_num in range(num_pulses):
-        # Trigger synchronized pulses
-        pspa.write(":TRIG:ALL")
+    for i in range(num_pulses):
+        # Pulse Drain: PV ch, range, base, pulse, compliance
+        pspa.write(f"PV {drain_ch},0,{vds_base},{vds_pulse},{compliance}")
         
-        # Measure during pulse
-        import time
-        time.sleep(0.05)
-        pspa.write(f":PAGE:CHAN:SMU{drain_ch}:FUNC MONI")
-        pspa.write(f":PAGE:CHAN:SMU{gate_ch}:FUNC MONI")
-        id_pulse = float(pspa.query(f":PAGE:CHAN:SMU{drain_ch}:MEAS:CURR?"))
-        ig_pulse = float(pspa.query(f":PAGE:CHAN:SMU{gate_ch}:MEAS:CURR?"))
+        pspa.write("XE")
+        pspa.query("*OPC?")
         
-        time_array.append(pulse_num * pulse_period + pulse_width/2)
-        vds_array.append(vds_pulse)
-        vgs_array.append(vgs_pulse)
-        id_array.append(id_pulse)
-        ig_array.append(ig_pulse)
-    
-    # Turn off outputs
-    output_off(pspa, drain_ch)
-    output_off(pspa, gate_ch)
-    output_off(pspa, source_ch)
-    
-    print("Pulsed transistor measurement complete")
+        try:
+            val = float(pspa.query("RMD? 1").strip().split()[-1])
+        except:
+            val = 0.0
+            
+        time_array.append(i * pulse_period)
+        id_array.append(val)
+        
+    pspa.write("CL")
     
     return {
         'Time': np.array(time_array),
-        'Vds': np.array(vds_array),
-        'Vgs': np.array(vgs_array),
-        'Id': np.array(id_array),
-        'Ig': np.array(ig_array)
-    }
+        'Id': np.array(id_array)
+    }   

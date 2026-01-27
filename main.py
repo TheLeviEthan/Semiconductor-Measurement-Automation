@@ -783,31 +783,23 @@ def execute_pspa_measurement(choice):
                 )
                 
                 # Save data to CSV
-                csv_data = np.column_stack([data['Time'], data['Vds'], data['Vgs'], data['Id'], data['Ig']])
+                csv_data = np.column_stack([data['Time'], data['Id']])
                 file_management.save_csv(
                     os.path.join(file_management.output_dir, "pulsed_transistor.csv"),
                     csv_data,
-                    "Time_s, Vds_V, Vgs_V, Id_A, Ig_A"
+                    "Time_s, Id_A"
                 )
                 
                 # Plot pulsed measurements
                 import matplotlib.pyplot as plt
-                fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
+                plt.figure(figsize=(10, 6))
                 
-                ax1.plot(data['Time'] * 1e3, data['Id'] * 1e3, marker='o', label='Id')
-                ax1.set_xlabel('Time (ms)')
-                ax1.set_ylabel('Id (mA)')
-                ax1.set_title('Pulsed Transistor: Drain Current')
-                ax1.grid(True)
-                ax1.legend()
-                
-                ax2.plot(data['Time'] * 1e3, data['Vds'], marker='o', label='Vds', alpha=0.7)
-                ax2.plot(data['Time'] * 1e3, data['Vgs'], marker='s', label='Vgs', alpha=0.7)
-                ax2.set_xlabel('Time (ms)')
-                ax2.set_ylabel('Voltage (V)')
-                ax2.set_title('Pulsed Transistor: Applied Voltages')
-                ax2.grid(True)
-                ax2.legend()
+                plt.plot(data['Time'] * 1e3, data['Id'] * 1e3, marker='o', label='Id')
+                plt.xlabel('Time (ms)')
+                plt.ylabel('Id (mA)')
+                plt.title(f'Pulsed Transistor: Drain Current (Vds={vds_pulse}V, Vgs={vgs_pulse}V)')
+                plt.grid(True)
+                plt.legend()
                 
                 plt.tight_layout()
                 plot_path = os.path.join(file_management.output_dir, "pulsed_transistor.png")
