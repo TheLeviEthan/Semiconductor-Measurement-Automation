@@ -107,6 +107,41 @@ def connect_pspa(gpib_address=None):
         raise
 
 
+def check_errors(pspa):
+    """
+    Check for instrument errors and print them.
+    
+    Args:
+        pspa (pyvisa.Resource): PSPA instrument object
+    
+    Returns:
+        list: List of error strings
+    """
+    errors = []
+    try:
+        while True:
+            error = pspa.query(":SYST:ERR?")
+            if error.startswith('0,') or '"No error"' in error:
+                break
+            errors.append(error.strip())
+            print(f"Instrument error: {error.strip()}")
+    except:
+        pass
+    return errors
+
+
+def clear_errors(pspa):
+    """
+    Clear all instrument errors.
+    
+    Args:
+        pspa (pyvisa.Resource): PSPA instrument object
+    """
+    pspa.write("*CLS")
+    # Read and discard all errors
+    check_errors(pspa)
+
+
 def disconnect_pspa(pspa):
     """
     Safely disconnect from PSPA.
@@ -114,8 +149,11 @@ def disconnect_pspa(pspa):
     Args:
         pspa (pyvisa.Resource): PSPA instrument object
     """
-    # Turn off all outputs
-    pspa.write(":OUTP:STAT OFF")
+    try:
+        # Turn off all outputs
+        pspa.write(":OUTP:STAT OFF")
+    except:
+        pass
     pspa.close()
     print("PSPA disconnected")
 
@@ -134,12 +172,13 @@ def configure_smu(pspa, channel, mode='VOLT', compliance=0.1):
         mode (str): 'VOLT' for voltage source or 'CURR' for current source
         compliance (float): Compliance limit (current for voltage source, voltage for current source)
     """
-    pspa.write(f":SOUR{channel}:FUNC:MODE {mode}")
-    
+    # Agilent 4156C command format
     if mode == 'VOLT':
-        pspa.write(f":SENS{channel}:CURR:PROT {compliance}")  # Current compliance
+        pspa.write(f":PAGE:CHAN:SMU{channel}:FUNC VOLT")
+        pspa.write(f":PAGE:CHAN:SMU{channel}:ICOMP {compliance}")
     else:
-        pspa.write(f":SENS{channel}:VOLT:PROT {compliance}")  # Voltage compliance
+        pspa.write(f":PAGE:CHAN:SMU{channel}:FUNC CURR")
+        pspa.write(f":PAGE:CHAN:SMU{channel}:VCOMP {compliance}")
     
     print(f"Channel {channel} configured as {mode} source with compliance {compliance}")
 
@@ -153,7 +192,7 @@ def set_voltage(pspa, channel, voltage):
         channel (int): Channel number
         voltage (float): Voltage in volts
     """
-    pspa.write(f":SOUR{channel}:VOLT {voltage}")
+    pspa.write(f":PAGE:CHAN:SMU{channel}:VOLT {voltage}")
 
 
 def set_current(pspa, channel, current):
@@ -165,17 +204,17 @@ def set_current(pspa, channel, current):
         channel (int): Channel number
         current (float): Current in amps
     """
-    pspa.write(f":SOUR{channel}:CURR {current}")
+    pspa.write(f":PAGE:CHAN:SMU{channel}:CURR {current}")
 
 
 def output_on(pspa, channel):
     """Enable output for a channel."""
-    pspa.write(f":OUTP{channel}:STAT ON")
+    pspa.write(f":PAGE:CHAN:SMU{channel}:STATE ON")
 
 
 def output_off(pspa, channel):
     """Disable output for a channel."""
-    pspa.write(f":OUTP{channel}:STAT OFF")
+    pspa.write(f":PAGE:CHAN:SMU{channel}:STATE OFF")
 
 
 # =============================
@@ -240,10 +279,11 @@ def measure_transistor_output_characteristics(pspa, vds_start, vds_stop, vds_ste
             set_voltage(pspa, drain_ch, vds)
             
             # Wait for settling
-            pspa.write(":TRIG:ACQ")
+            import time
+            time.sleep(0.01)  # 10ms settling time
             
             # Measure drain current
-            id_val = float(pspa.query(f":MEAS:CURR? (@{drain_ch})"))
+            id_val = float(pspa.query(f":MEAS:CURR? SMU{drain_ch}"))
             
             vds_array.append(vds)
             vgs_array.append(vgs)
@@ -317,11 +357,12 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
         set_voltage(pspa, gate_ch, vgs)
         
         # Wait for settling
-        pspa.write(":TRIG:ACQ")
+        import time
+        time.sleep(0.01)  # 10ms settling time
         
         # Measure drain current and gate current
-        id_val = float(pspa.query(f":MEAS:CURR? (@{drain_ch})"))
-        ig_val = float(pspa.query(f":MEAS:CURR? (@{gate_ch})"))
+        id_val = float(pspa.query(f":MEAS:CURR? SMU{drain_ch}"))
+        ig_val = float(pspa.query(f":MEAS:CURR? SMU{gate_ch}"))
         
         vgs_array.append(vgs)
         id_array.append(id_val)
@@ -381,10 +422,11 @@ def measure_iv_curve(pspa, v_start, v_stop, v_step, channel=1, compliance=0.1):
         set_voltage(pspa, channel, v)
         
         # Wait for settling
-        pspa.write(":TRIG:ACQ")
+        import time
+        time.sleep(0.01)  # 10ms settling time
         
         # Measure current
-        i_val = float(pspa.query(f":MEAS:CURR? (@{channel})"))
+        i_val = float(pspa.query(f":READ? (@{channel})"))
         
         voltage_array.append(v)
         current_array.append(i_val)
@@ -439,10 +481,11 @@ def measure_iv_bidirectional(pspa, v_max, v_step, channel=1, compliance=0.1):
         set_voltage(pspa, channel, v)
         
         # Wait for settling
-        pspa.write(":TRIG:ACQ")
+        import time
+        time.sleep(0.01)  # 10ms settling time
         
         # Measure current
-        i_val = float(pspa.query(f":MEAS:CURR? (@{channel})"))
+        i_val = float(pspa.query(f":MEAS:CURR? SMU{channel}"))
         
         voltage_array.append(v)
         current_array.append(i_val)
@@ -523,14 +566,16 @@ def measure_pulsed_iv(pspa, v_base, v_pulse, pulse_width, pulse_period, num_puls
         
         # Measure at base and pulse levels
         # Base measurement
-        i_base = float(pspa.query(f":MEAS:CURR? (@{channel})"))
+        import time
+        time.sleep(0.01)
+        i_base = float(pspa.query(f":MEAS:CURR? SMU{channel}"))
         time_array.append(pulse_num * pulse_period)
         voltage_array.append(v_base)
         current_array.append(i_base)
         
         # Pulse measurement (during pulse)
-        pspa.write(":TRIG:ACQ")
-        i_pulse = float(pspa.query(f":MEAS:CURR? (@{channel})"))
+        time.sleep(0.01)
+        i_pulse = float(pspa.query(f":MEAS:CURR? SMU{channel}"))
         time_array.append(pulse_num * pulse_period + pulse_width/2)
         voltage_array.append(v_pulse)
         current_array.append(i_pulse)
@@ -615,9 +660,10 @@ def measure_pulsed_transistor(pspa, vds_pulse, vgs_pulse, vds_base, vgs_base,
         pspa.write(":TRIG:ALL")
         
         # Measure during pulse
-        pspa.write(":TRIG:ACQ")
-        id_pulse = float(pspa.query(f":MEAS:CURR? (@{drain_ch})"))
-        ig_pulse = float(pspa.query(f":MEAS:CURR? (@{gate_ch})"))
+        import time
+        time.sleep(0.01)
+        id_pulse = float(pspa.query(f":MEAS:CURR? SMU{drain_ch}"))
+        ig_pulse = float(pspa.query(f":MEAS:CURR? SMU{gate_ch}"))
         
         time_array.append(pulse_num * pulse_period + pulse_width/2)
         vds_array.append(vds_pulse)
