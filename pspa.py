@@ -280,10 +280,11 @@ def measure_transistor_output_characteristics(pspa, vds_start, vds_stop, vds_ste
             
             # Wait for settling
             import time
-            time.sleep(0.01)  # 10ms settling time
+            time.sleep(0.05)  # 50ms settling time
             
-            # Measure drain current
-            id_val = float(pspa.query(f":MEAS:CURR? SMU{drain_ch}"))
+            # Measure drain current using channel monitor
+            pspa.write(f":PAGE:CHAN:SMU{drain_ch}:FUNC MONI")
+            id_val = float(pspa.query(f":PAGE:CHAN:SMU{drain_ch}:MEAS:CURR?"))
             
             vds_array.append(vds)
             vgs_array.append(vgs)
@@ -358,11 +359,13 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
         
         # Wait for settling
         import time
-        time.sleep(0.01)  # 10ms settling time
+        time.sleep(0.05)  # 50ms settling time
         
-        # Measure drain current and gate current
-        id_val = float(pspa.query(f":MEAS:CURR? SMU{drain_ch}"))
-        ig_val = float(pspa.query(f":MEAS:CURR? SMU{gate_ch}"))
+        # Measure drain current and gate current using channel monitor
+        pspa.write(f":PAGE:CHAN:SMU{drain_ch}:FUNC MONI")
+        pspa.write(f":PAGE:CHAN:SMU{gate_ch}:FUNC MONI")
+        id_val = float(pspa.query(f":PAGE:CHAN:SMU{drain_ch}:MEAS:CURR?"))
+        ig_val = float(pspa.query(f":PAGE:CHAN:SMU{gate_ch}:MEAS:CURR?"))
         
         vgs_array.append(vgs)
         id_array.append(id_val)
@@ -423,10 +426,11 @@ def measure_iv_curve(pspa, v_start, v_stop, v_step, channel=1, compliance=0.1):
         
         # Wait for settling
         import time
-        time.sleep(0.01)  # 10ms settling time
+        time.sleep(0.05)  # 50ms settling time
         
-        # Measure current
-        i_val = float(pspa.query(f":READ? (@{channel})"))
+        # Measure current using channel monitor
+        pspa.write(f":PAGE:CHAN:SMU{channel}:FUNC MONI")
+        i_val = float(pspa.query(f":PAGE:CHAN:SMU{channel}:MEAS:CURR?"))
         
         voltage_array.append(v)
         current_array.append(i_val)
@@ -482,10 +486,11 @@ def measure_iv_bidirectional(pspa, v_max, v_step, channel=1, compliance=0.1):
         
         # Wait for settling
         import time
-        time.sleep(0.01)  # 10ms settling time
+        time.sleep(0.05)  # 50ms settling time
         
-        # Measure current
-        i_val = float(pspa.query(f":MEAS:CURR? SMU{channel}"))
+        # Measure current using channel monitor
+        pspa.write(f":PAGE:CHAN:SMU{channel}:FUNC MONI")
+        i_val = float(pspa.query(f":PAGE:CHAN:SMU{channel}:MEAS:CURR?"))
         
         voltage_array.append(v)
         current_array.append(i_val)
@@ -567,15 +572,16 @@ def measure_pulsed_iv(pspa, v_base, v_pulse, pulse_width, pulse_period, num_puls
         # Measure at base and pulse levels
         # Base measurement
         import time
-        time.sleep(0.01)
-        i_base = float(pspa.query(f":MEAS:CURR? SMU{channel}"))
+        time.sleep(0.05)
+        pspa.write(f":PAGE:CHAN:SMU{channel}:FUNC MONI")
+        i_base = float(pspa.query(f":PAGE:CHAN:SMU{channel}:MEAS:CURR?"))
         time_array.append(pulse_num * pulse_period)
         voltage_array.append(v_base)
         current_array.append(i_base)
         
         # Pulse measurement (during pulse)
-        time.sleep(0.01)
-        i_pulse = float(pspa.query(f":MEAS:CURR? SMU{channel}"))
+        time.sleep(0.05)
+        i_pulse = float(pspa.query(f":PAGE:CHAN:SMU{channel}:MEAS:CURR?"))
         time_array.append(pulse_num * pulse_period + pulse_width/2)
         voltage_array.append(v_pulse)
         current_array.append(i_pulse)
@@ -661,9 +667,11 @@ def measure_pulsed_transistor(pspa, vds_pulse, vgs_pulse, vds_base, vgs_base,
         
         # Measure during pulse
         import time
-        time.sleep(0.01)
-        id_pulse = float(pspa.query(f":MEAS:CURR? SMU{drain_ch}"))
-        ig_pulse = float(pspa.query(f":MEAS:CURR? SMU{gate_ch}"))
+        time.sleep(0.05)
+        pspa.write(f":PAGE:CHAN:SMU{drain_ch}:FUNC MONI")
+        pspa.write(f":PAGE:CHAN:SMU{gate_ch}:FUNC MONI")
+        id_pulse = float(pspa.query(f":PAGE:CHAN:SMU{drain_ch}:MEAS:CURR?"))
+        ig_pulse = float(pspa.query(f":PAGE:CHAN:SMU{gate_ch}:MEAS:CURR?"))
         
         time_array.append(pulse_num * pulse_period + pulse_width/2)
         vds_array.append(vds_pulse)

@@ -79,11 +79,15 @@ def test_4156c_commands():
             error = pspa.query(":SYST:ERR?")
             print(f"Error response: {error}")
             
-        # Test 4: Measurement commands
+        # Test 4: Measurement commands (4156C uses monitor function)
         print("\n--- Test 4: Measurement Commands ---")
+        # First set channel to monitor mode
+        pspa.write(":PAGE:CHAN:SMU1:FUNC MONI")
+        time.sleep(0.1)
+        
         test_commands = [
-            (":MEAS:CURR? SMU1", "Measure current on SMU1"),
-            (":MEAS:VOLT? SMU1", "Measure voltage on SMU1"),
+            (":PAGE:CHAN:SMU1:MEAS:CURR?", "Measure current on SMU1"),
+            (":PAGE:CHAN:SMU1:MEAS:VOLT?", "Measure voltage on SMU1"),
         ]
         
         for cmd, desc in test_commands:
