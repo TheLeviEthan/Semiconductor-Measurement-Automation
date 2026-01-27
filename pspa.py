@@ -28,6 +28,22 @@ NUM_POINTS = 201         # number of points in LOG sweep
 # Connection and Initialization
 # =============================
 
+def list_visa_resources():
+    """
+    List all available VISA resources.
+    
+    Returns:
+        list: List of available VISA resource strings
+    """
+    try:
+        rm = pyvisa.ResourceManager()
+        resources = rm.list_resources()
+        return list(resources)
+    except Exception as e:
+        print(f"Error listing VISA resources: {e}")
+        return []
+
+
 def connect_pspa(gpib_address=None):
     """
     Connect to PSPA via GPIB.
@@ -41,19 +57,54 @@ def connect_pspa(gpib_address=None):
     if gpib_address is None:
         gpib_address = GPIB_ADDRESS
     
-    rm = pyvisa.ResourceManager()
-    pspa = rm.open_resource(gpib_address)
-    pspa.timeout = 30000  # 30 second timeout
+    # Check if GPIB address is set
+    if not gpib_address or gpib_address == "":
+        print("\nError: GPIB address not set!")
+        print("\nAvailable VISA resources:")
+        resources = list_visa_resources()
+        if resources:
+            for i, resource in enumerate(resources):
+                print(f"  {i+1}. {resource}")
+            print("\nPlease update GPIB_ADDRESS in pspa.py or provide the address when calling this function.")
+        else:
+            print("  No VISA resources found. Check your GPIB connection.")
+        raise ValueError("GPIB address not configured")
     
-    # Reset and clear
-    pspa.write("*RST")
-    pspa.write("*CLS")
-    
-    # Query instrument ID
-    idn = pspa.query("*IDN?")
-    print(f"Connected to: {idn.strip()}")
-    
-    return pspa
+    try:
+        rm = pyvisa.ResourceManager()
+        print(f"Attempting to connect to: {gpib_address}")
+        pspa = rm.open_resource(gpib_address)
+        pspa.timeout = 60000  # 60 second timeout for initial connection
+        
+        # Query instrument ID first (less disruptive than reset)
+        try:
+            idn = pspa.query("*IDN?")
+            print(f"Connected to: {idn.strip()}")
+        except Exception as e:
+            print(f"Warning: Could not query instrument ID: {e}")
+            print("Continuing anyway...")
+        
+        # Clear status (less disruptive than full reset)
+        pspa.write("*CLS")
+        
+        # Set a more reasonable timeout for normal operations
+        pspa.timeout = 30000  # 30 second timeout
+        
+        return pspa
+        
+    except Exception as e:
+        print(f"\nError connecting to PSPA at {gpib_address}:")
+        print(f"  {e}")
+        print("\nTroubleshooting:")
+        print("  1. Check that the instrument is powered on")
+        print("  2. Verify the GPIB cable is connected")
+        print("  3. Confirm the GPIB address is correct")
+        print("\nAvailable VISA resources:")
+        resources = list_visa_resources()
+        if resources:
+            for i, resource in enumerate(resources):
+                print(f"  {i+1}. {resource}")
+        raise
 
 
 def disconnect_pspa(pspa):
