@@ -60,10 +60,10 @@ def set_output_dir(path):
     global output_dir
     output_dir = str(Path(path).expanduser().resolve())
 
-def save_csv(path, data, header):
-    """Save data array to a uniquified CSV file with header."""
+def save_csv(filename, data, header):
+    """Save data array to a uniquified CSV file with header in output/csv folder."""
     ensure_output_dir(os.path.join(output_dir, "csv"))
-    csv_path = uniquify(path)
+    csv_path = uniquify(os.path.join(output_dir, "csv", filename))
     print(f"Saving CSV to: {csv_path}")
     np.savetxt(csv_path, data, delimiter=",", header=header, comments="")
     return csv_path
