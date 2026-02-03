@@ -1,8 +1,8 @@
 """
-Filename: main.py
+Filename: pspa.py
 Author: Ethan Ruddell
 Date: 2025-01-23
-Description: Contains all constants and functions for PIA measurements.
+Description: Contains all constants and functions for PSPA measurements.
              Updated for Agilent 4155C/4156C FLEX Syntax.
 """
 
@@ -13,15 +13,33 @@ import time
 # =============================
 # User settings and constants
 # =============================
-GPIB_ADDRESS = ""   # Example: "GPIB0::17::INSTR"
+GPIB_ADDRESS = "GPIB0::16::INSTR"   # Example: "GPIB0::17::INSTR"
 
 # Global state to track SMU configuration (compliance, mode)
 # Keys: Channel int (1-4), Values: {'mode': 'VOLT', 'compliance': 0.1, 'range': 0}
 SMU_CONFIG = {}
 
+# Global state for pulse configuration
+PULSE_CONFIG = {}
+
 # =============================
 # Connection and Initialization
 # =============================
+
+import re
+
+_NUM_RE = re.compile(r'([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)')
+
+def parse_flex_number(s: str) -> float:
+    """
+    Extract the *last* floating-point number from a FLEX reply.
+    Example: '128AI+5.331500E-11' -> 5.331500e-11
+    """
+    s = s.strip()
+    nums = _NUM_RE.findall(s)
+    if not nums:
+        raise ValueError(f"No numeric value found in reply: {s!r}")
+    return float(nums[-1])
 
 def list_visa_resources():
     """List all available VISA resources."""
@@ -104,22 +122,11 @@ def measure_channel_current(pspa, channel):
     # Range 0 = Auto Range [cite: 1303, 1409]
     try:
         result_str = pspa.query(f"TI? {channel},0")
-        # FLEX returns format: "N  <data>" where N is status. We need to parse.
-        # However, pyvisa query usually strips headers if configured, but FLEX headers are tricky.
-        # Typical response: "INA +1.2345E-03" (Header(3 chars) + Data)
-        # We assume FMT 1 was sent in init.
-        
-        # Simple float conversion handles the numeric part if header is clean space separated
-        # or we strip the first few characters if they are status codes.
-        # FMT 1: Header + Data [cite: 1302]
-        # Data usually starts after the status header (e.g. 'NAI', 'NAV').
-        # Splitting by space usually works.
-        parts = result_str.strip().split()
-        val = float(parts[-1]) 
-        return val
+        return parse_flex_number(result_str)
     except Exception as e:
         print(f"Error measuring current on CH{channel}: {e}")
         return 0.0
+
 
 # =============================
 # Source Configuration Functions
@@ -182,6 +189,45 @@ def output_off(pspa, channel):
     pspa.write(f"CL {channel}")
 
 # =============================
+# Helper Functions
+# =============================
+
+def validate_channel(channel):
+    """Validate channel number is within valid range (1-4 for 4156C)."""
+    if not isinstance(channel, int) or channel < 1 or channel > 4:
+        raise ValueError(f"Invalid channel number: {channel}. Must be 1-4.")
+    return channel
+
+def validate_compliance(compliance):
+    """Validate compliance value is positive."""
+    if compliance <= 0:
+        raise ValueError(f"Compliance must be positive, got {compliance}")
+    return compliance
+
+def validate_step(step):
+    """Validate step value is non-zero."""
+    if step == 0:
+        raise ValueError("Step must be non-zero")
+    return step
+
+def sweep_values(start: float, stop: float, step: float) -> np.ndarray:
+    """Generate sweep values from start to stop with given step."""
+    if step == 0:
+        raise ValueError("step must be non-zero")
+
+    n = int(round((stop - start) / step)) + 1
+    # Guard against sign mistakes
+    if n <= 0:
+        return np.array([], dtype=float)
+
+    vals = start + step * np.arange(n, dtype=float)
+
+    # Optional: hard-clip last value to exactly stop (prevents 1e-16 drift)
+    if len(vals) > 0:
+        vals[-1] = stop
+    return vals
+
+# =============================
 # Transistor I-V Measurements
 # =============================
 
@@ -189,6 +235,14 @@ def measure_transistor_output_characteristics(pspa, vds_start, vds_stop, vds_ste
                                                vgs_start, vgs_stop, vgs_step,
                                                drain_ch=1, gate_ch=2, source_ch=3,
                                                compliance=0.1):
+    # Validate inputs
+    validate_channel(drain_ch)
+    validate_channel(gate_ch)
+    validate_channel(source_ch)
+    validate_compliance(compliance)
+    validate_step(vds_step)
+    validate_step(vgs_step)
+    
     # Configure channels (Updates global state and enables channels)
     configure_smu(pspa, drain_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, gate_ch, mode='VOLT', compliance=compliance)
@@ -203,10 +257,10 @@ def measure_transistor_output_characteristics(pspa, vds_start, vds_stop, vds_ste
     vds_array = []
     vgs_array = []
     id_array = []
-    
-    vgs_values = np.arange(vgs_start, vgs_stop + vgs_step, vgs_step)
-    vds_values = np.arange(vds_start, vds_stop + vds_step, vds_step)
-    
+
+    vgs_values = sweep_values(vgs_start, vgs_stop, vgs_step)
+    vds_values = sweep_values(vds_start, vds_stop, vds_step)
+
     print("Starting Output Characteristics Sweep...")
     
     for vgs in vgs_values:
@@ -235,6 +289,13 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
                                                  vds_constant,
                                                  drain_ch=1, gate_ch=2, source_ch=3,
                                                  compliance=0.1):
+    # Validate inputs
+    validate_channel(drain_ch)
+    validate_channel(gate_ch)
+    validate_channel(source_ch)
+    validate_compliance(compliance)
+    validate_step(vgs_step)
+    
     configure_smu(pspa, drain_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, gate_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, source_ch, mode='VOLT', compliance=compliance)
@@ -275,14 +336,19 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
 # =============================
 
 def measure_iv_curve(pspa, v_start, v_stop, v_step, channel=1, compliance=0.1):
+    # Validate inputs
+    validate_channel(channel)
+    validate_compliance(compliance)
+    validate_step(v_step)
+    
     configure_smu(pspa, channel, mode='VOLT', compliance=compliance)
     output_on(pspa, channel)
     
     voltage_array = []
     current_array = []
-    
-    voltages = np.arange(v_start, v_stop + v_step, v_step)
-    
+
+    voltages = sweep_values(v_start, v_stop, v_step)
+
     for v in voltages:
         set_voltage(pspa, channel, v)
         i_val = measure_channel_current(pspa, channel)
@@ -294,17 +360,21 @@ def measure_iv_curve(pspa, v_start, v_stop, v_step, channel=1, compliance=0.1):
     return {'Voltage': np.array(voltage_array), 'Current': np.array(current_array)}
 
 def measure_iv_bidirectional(pspa, v_max, v_step, channel=1, compliance=0.1):
+    # Validate inputs
+    validate_channel(channel)
+    validate_compliance(compliance)
+    validate_step(v_step)
+    
     configure_smu(pspa, channel, mode='VOLT', compliance=compliance)
     output_on(pspa, channel)
     
     voltage_array = []
     current_array = []
-    
-    sweep = np.concatenate([
-        np.arange(0, v_max + v_step, v_step),
-        np.arange(v_max - v_step, -v_max - v_step, -v_step),
-        np.arange(-v_max + v_step, 0 + v_step, v_step)
-    ])
+
+    up = sweep_values(0, v_max, v_step)
+    down = sweep_values(v_max - v_step, -v_max, -v_step)
+    back = sweep_values(-v_max + v_step, 0, v_step)
+    sweep = np.concatenate([up, down, back])
     
     for v in sweep:
         set_voltage(pspa, channel, v)
@@ -340,6 +410,16 @@ def measure_pulsed_iv(pspa, v_base, v_pulse, pulse_width, pulse_period, num_puls
     Measure pulsed IV using '1 Channel Pulsed Spot Measurement' mode (MM 3).
     [cite: 1338, 1346]
     """
+    # Validate inputs
+    validate_channel(channel)
+    validate_compliance(compliance)
+    if pulse_width <= 0 or pulse_period <= 0:
+        raise ValueError("Pulse width and period must be positive")
+    if pulse_width >= pulse_period:
+        raise ValueError("Pulse width must be less than pulse period")
+    if num_pulses <= 0:
+        raise ValueError("Number of pulses must be positive")
+    
     # 1. Setup
     pspa.write("US") # Ensure FLEX
     pspa.write("FMT 1") 
@@ -381,7 +461,7 @@ def measure_pulsed_iv(pspa, v_base, v_pulse, pulse_width, pulse_period, num_puls
         try:
             val_str = pspa.query("RMD? 1")
             # Parse result (Format: status header + value)
-            current_val = float(val_str.strip().split()[-1])
+            current_val = parse_flex_number(val_str)
         except:
             current_val = 0.0
             
@@ -404,19 +484,31 @@ def measure_pulsed_transistor(pspa, vds_pulse, vgs_pulse, vds_base, vgs_base,
                                drain_ch=1, gate_ch=2, source_ch=3, compliance=0.1):
     """
     Pulsed transistor measurement using FLEX.
-    Since 4155C only supports 1-channel pulsed spot (MM 3) natively with easy setup,
-    we will use 'Pulsed Sweep' (MM 4) logic or manual PV setups if possible.
     
-    For simplicity and robustness based on the manual[cite: 1346]:
-    We will pulse the Drain (Vds) while holding Gate (Vgs) constant, or vice-versa.
-    Synchronized pulsing on 4155C is complex in spot mode. 
+    LIMITATION: This implementation pulses the Drain (Vds) while the Gate (Vgs) 
+    is held at a constant DC level (vgs_pulse). The 4155C requires complex 
+    'Staircase Sweep with Pulse' setup for synchronized dual-channel pulsing,
+    which is not implemented here.
     
-    Below implements a simpler approach: Pulse Drain, Measure Drain, while Gate is DC.
-    (Simultaneous pulsing of Gate and Drain requires complex 'Staircase Sweep with Pulse' setup).
+    The measurement pulses Vds between vds_base and vds_pulse while measuring
+    drain current. Gate is held constant at vgs_pulse (vgs_base is not used
+    in this simplified implementation).
     """
+    # Validate inputs
+    validate_channel(drain_ch)
+    validate_channel(gate_ch)
+    validate_channel(source_ch)
+    validate_compliance(compliance)
+    if pulse_width <= 0 or pulse_period <= 0:
+        raise ValueError("Pulse width and period must be positive")
+    if pulse_width >= pulse_period:
+        raise ValueError("Pulse width must be less than pulse period")
+    if num_pulses <= 0:
+        raise ValueError("Number of pulses must be positive")
     
     # Setup FLEX
     pspa.write("US")
+    pspa.write("FMT 1")
     pspa.write(f"CN {drain_ch},{gate_ch},{source_ch}")
     pspa.write(f"PT 0,{pulse_width},{pulse_period}")
     
@@ -426,8 +518,8 @@ def measure_pulsed_transistor(pspa, vds_pulse, vgs_pulse, vds_base, vgs_base,
     # Ground Source
     set_voltage(pspa, source_ch, 0)
     
-    # Apply Base Voltage to Gate (DC) - Note: True pulsed gate+drain is harder in spot mode
-    # We assume DC Gate for this implementation to keep it stable.
+    # Apply pulse voltage to Gate (DC - held constant during measurement)
+    # NOTE: vgs_base is ignored in this implementation
     set_voltage(pspa, gate_ch, vgs_pulse) 
     
     time_array = []

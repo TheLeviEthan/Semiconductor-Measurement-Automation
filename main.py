@@ -9,6 +9,7 @@ the Keysight 4294A Precision Impedance Analyzer and a DC bias source.
 import os
 import argparse
 import numpy as np
+import matplotlib.pyplot as plt
 import pia
 import pspa
 import file_management
@@ -37,6 +38,30 @@ pspa_measurements = [
 ]
 
 
+def safe_float_input(prompt, default):
+    """Safely get float input from user with default value and error handling."""
+    while True:
+        try:
+            user_input = input(prompt).strip()
+            if not user_input:
+                return float(default)
+            return float(user_input)
+        except ValueError:
+            print(f"Invalid input. Please enter a number.")
+
+
+def safe_int_input(prompt, default):
+    """Safely get integer input from user with default value and error handling."""
+    while True:
+        try:
+            user_input = input(prompt).strip()
+            if not user_input:
+                return int(default)
+            return int(user_input)
+        except ValueError:
+            print(f"Invalid input. Please enter an integer.")
+
+
 def parse_args():
     """Parse CLI arguments for the measurement automation script."""
     parser = argparse.ArgumentParser(description="Automate semiconductor measurements.")
@@ -49,6 +74,8 @@ def parse_args():
     return parser.parse_args()
 
 def main():
+    # TODO: add save path in CLI, first prompt should select tool
+
     args = parse_args()
     
     print("Welcome to the NRG Semiconductor Measurement Automation...\n")
@@ -216,7 +243,7 @@ def execute_pia_measurement(choice):
             # Save Cp-D data to CSV
             csv_data = np.column_stack([freq_axis, cp_vals, d_vals])
             file_management.save_csv(
-                os.path.join(file_management.output_dir, "cpd_data.csv"),
+                "cpd_data.csv",
                 csv_data,
                 "frequency_Hz, Cp_F, D"
             )
@@ -251,7 +278,7 @@ def execute_pia_measurement(choice):
             # Save Cp-D data to CSV
             csv_data = np.column_stack([freq_axis, cp_vals, d_vals])
             file_management.save_csv(
-                os.path.join(file_management.output_dir, "cpd_data.csv"),
+                "cpd_data.csv",
                 csv_data,
                 "frequency_Hz, Cp_F, D"
             )
@@ -296,7 +323,7 @@ def execute_pia_measurement(choice):
                 # Save C–V & εr(V) data
                 csv_data = np.column_stack([cycles_all, v_all, cp_all, eps_all])
                 file_management.save_csv(
-                    os.path.join(file_management.output_dir, "cv_dielectric_cycles.csv"),
+                    "cv_dielectric_cycles.csv",
                     csv_data,
                     "cycle_index, bias_V, Cp_F, eps_r"
                 )
@@ -357,7 +384,7 @@ def execute_pia_measurement(choice):
                 # Save C–V & εr(V) data
                 csv_data = np.column_stack([cycles_all, v_all, cp_all, eps_all])
                 file_management.save_csv(
-                    os.path.join(file_management.output_dir, "cv_dielectric_cycles.csv"),
+                    "cv_dielectric_cycles.csv",
                     csv_data,
                     "cycle_index, bias_V, Cp_F, eps_r"
                 )
@@ -421,7 +448,7 @@ def execute_pia_measurement(choice):
                 # Save εr(f) data
                 csv_data = np.column_stack([freq_axis, cp_f, eps_f])
                 file_management.save_csv(
-                    os.path.join(file_management.output_dir, "eps_vs_freq.csv"),
+                    "eps_vs_freq.csv",
                     csv_data,
                     "frequency_Hz, Cp_F, eps_r"
                 )
@@ -478,17 +505,17 @@ def execute_pspa_measurement(choice):
             # PSPA Transistor Output Characteristics
             print("PSPA: Transistor Output Characteristics (Id-Vds curves)")
             
-            vds_start = float(input("Enter start Vds (V) [default 0]: ") or "0")
-            vds_stop = float(input("Enter stop Vds (V) [default 5]: ") or "5")
-            vds_step = float(input("Enter Vds step (V) [default 0.1]: ") or "0.1")
-            vgs_start = float(input("Enter start Vgs (V) [default 0]: ") or "0")
-            vgs_stop = float(input("Enter stop Vgs (V) [default 3]: ") or "3")
-            vgs_step = float(input("Enter Vgs step (V) [default 0.5]: ") or "0.5")
-            compliance = float(input("Enter current compliance (A) [default 0.1]: ") or "0.1")
+            vds_start = safe_float_input("Enter start Vds (V) [default 0]: ", 0)
+            vds_stop = safe_float_input("Enter stop Vds (V) [default 5]: ", 5)
+            vds_step = safe_float_input("Enter Vds step (V) [default 0.1]: ", 0.1)
+            vgs_start = safe_float_input("Enter start Vgs (V) [default 0]: ", 0)
+            vgs_stop = safe_float_input("Enter stop Vgs (V) [default 3]: ", 3)
+            vgs_step = safe_float_input("Enter Vgs step (V) [default 0.5]: ", 0.5)
+            compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
             
-            drain_ch = int(input("Enter drain channel [default 1]: ") or "1")
-            gate_ch = int(input("Enter gate channel [default 2]: ") or "2")
-            source_ch = int(input("Enter source channel [default 3]: ") or "3")
+            drain_ch = safe_int_input("Enter drain channel [default 1]: ", 1)
+            gate_ch = safe_int_input("Enter gate channel [default 2]: ", 2)
+            source_ch = safe_int_input("Enter source channel [default 3]: ", 3)
             
             try:
                 pspa_inst = pspa.connect_pspa()
@@ -503,13 +530,12 @@ def execute_pspa_measurement(choice):
                 # Save data to CSV
                 csv_data = np.column_stack([data['Vds'], data['Vgs'], data['Id']])
                 file_management.save_csv(
-                    os.path.join(file_management.output_dir, "transistor_output_chars.csv"),
+                    "transistor_output_chars.csv",
                     csv_data,
                     "Vds_V, Vgs_V, Id_A"
                 )
                 
                 # Plot Id vs Vds for each Vgs
-                import matplotlib.pyplot as plt
                 plt.figure(figsize=(10, 6))
                 vgs_values = np.unique(data['Vgs'])
                 for vgs in vgs_values:
@@ -521,7 +547,8 @@ def execute_pspa_measurement(choice):
                 plt.legend()
                 plt.grid(True)
                 plt.tight_layout()
-                plot_path = os.path.join(file_management.output_dir, "transistor_output_chars.png")
+                file_management.ensure_output_dir(os.path.join(file_management.output_dir, "images"))
+                plot_path = file_management.uniquify(os.path.join(file_management.output_dir, "images", "transistor_output_chars.png"))
                 plt.savefig(plot_path, dpi=300)
                 plt.close()
                 print(f"Plot saved: {plot_path}")
@@ -539,15 +566,15 @@ def execute_pspa_measurement(choice):
             # PSPA Transistor Transfer Characteristics
             print("PSPA: Transistor Transfer Characteristics (Id-Vgs curve)")
             
-            vgs_start = float(input("Enter start Vgs (V) [default -1]: ") or "-1")
-            vgs_stop = float(input("Enter stop Vgs (V) [default 3]: ") or "3")
-            vgs_step = float(input("Enter Vgs step (V) [default 0.05]: ") or "0.05")
-            vds_constant = float(input("Enter constant Vds (V) [default 5]: ") or "5")
-            compliance = float(input("Enter current compliance (A) [default 0.1]: ") or "0.1")
+            vgs_start = safe_float_input("Enter start Vgs (V) [default -1]: ", -1)
+            vgs_stop = safe_float_input("Enter stop Vgs (V) [default 3]: ", 3)
+            vgs_step = safe_float_input("Enter Vgs step (V) [default 0.05]: ", 0.05)
+            vds_constant = safe_float_input("Enter constant Vds (V) [default 5]: ", 5)
+            compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
             
-            drain_ch = int(input("Enter drain channel [default 1]: ") or "1")
-            gate_ch = int(input("Enter gate channel [default 2]: ") or "2")
-            source_ch = int(input("Enter source channel [default 3]: ") or "3")
+            drain_ch = safe_int_input("Enter drain channel [default 1]: ", 1)
+            gate_ch = safe_int_input("Enter gate channel [default 2]: ", 2)
+            source_ch = safe_int_input("Enter source channel [default 3]: ", 3)
             
             try:
                 pspa_inst = pspa.connect_pspa()
@@ -561,13 +588,12 @@ def execute_pspa_measurement(choice):
                 # Save data to CSV
                 csv_data = np.column_stack([data['Vgs'], data['Id'], data['Ig']])
                 file_management.save_csv(
-                    os.path.join(file_management.output_dir, "transistor_transfer_chars.csv"),
+                    "transistor_transfer_chars.csv",
                     csv_data,
                     "Vgs_V, Id_A, Ig_A"
                 )
                 
                 # Plot Id and Ig vs Vgs
-                import matplotlib.pyplot as plt
                 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
                 
                 # Linear scale
@@ -588,7 +614,8 @@ def execute_pspa_measurement(choice):
                 ax2.legend()
                 
                 plt.tight_layout()
-                plot_path = os.path.join(file_management.output_dir, "transistor_transfer_chars.png")
+                file_management.ensure_output_dir(os.path.join(file_management.output_dir, "images"))
+                plot_path = file_management.uniquify(os.path.join(file_management.output_dir, "images", "transistor_transfer_chars.png"))
                 plt.savefig(plot_path, dpi=300)
                 plt.close()
                 print(f"Plot saved: {plot_path}")
@@ -606,11 +633,11 @@ def execute_pspa_measurement(choice):
             # PSPA I-V Curve (Unidirectional)
             print("PSPA: I-V Curve (Unidirectional)")
             
-            v_start = float(input("Enter start voltage (V) [default 0]: ") or "0")
-            v_stop = float(input("Enter stop voltage (V) [default 5]: ") or "5")
-            v_step = float(input("Enter voltage step (V) [default 0.1]: ") or "0.1")
-            compliance = float(input("Enter current compliance (A) [default 0.1]: ") or "0.1")
-            channel = int(input("Enter channel number [default 1]: ") or "1")
+            v_start = safe_float_input("Enter start voltage (V) [default 0]: ", 0)
+            v_stop = safe_float_input("Enter stop voltage (V) [default 5]: ", 5)
+            v_step = safe_float_input("Enter voltage step (V) [default 0.1]: ", 0.1)
+            compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
+            channel = safe_int_input("Enter channel number [default 1]: ", 1)
             
             try:
                 pspa_inst = pspa.connect_pspa()
@@ -621,13 +648,12 @@ def execute_pspa_measurement(choice):
                 # Save data to CSV
                 csv_data = np.column_stack([data['Voltage'], data['Current']])
                 file_management.save_csv(
-                    os.path.join(file_management.output_dir, "iv_curve.csv"),
+                    "iv_curve.csv",
                     csv_data,
                     "Voltage_V, Current_A"
                 )
                 
                 # Plot I-V curve
-                import matplotlib.pyplot as plt
                 plt.figure(figsize=(10, 6))
                 plt.plot(data['Voltage'], data['Current'] * 1e3, marker='o')
                 plt.xlabel('Voltage (V)')
@@ -635,7 +661,8 @@ def execute_pspa_measurement(choice):
                 plt.title('I-V Curve (Unidirectional)')
                 plt.grid(True)
                 plt.tight_layout()
-                plot_path = os.path.join(file_management.output_dir, "iv_curve.png")
+                file_management.ensure_output_dir(os.path.join(file_management.output_dir, "images"))
+                plot_path = file_management.uniquify(os.path.join(file_management.output_dir, "images", "iv_curve.png"))
                 plt.savefig(plot_path, dpi=300)
                 plt.close()
                 print(f"Plot saved: {plot_path}")
@@ -653,10 +680,10 @@ def execute_pspa_measurement(choice):
             # PSPA I-V Curve (Bidirectional)
             print("PSPA: I-V Curve (Bidirectional)")
             
-            v_max = float(input("Enter maximum voltage magnitude (V) [default 5]: ") or "5")
-            v_step = float(input("Enter voltage step (V) [default 0.1]: ") or "0.1")
-            compliance = float(input("Enter current compliance (A) [default 0.1]: ") or "0.1")
-            channel = int(input("Enter channel number [default 1]: ") or "1")
+            v_max = safe_float_input("Enter maximum voltage magnitude (V) [default 5]: ", 5)
+            v_step = safe_float_input("Enter voltage step (V) [default 0.1]: ", 0.1)
+            compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
+            channel = safe_int_input("Enter channel number [default 1]: ", 1)
             
             try:
                 pspa_inst = pspa.connect_pspa()
@@ -667,13 +694,12 @@ def execute_pspa_measurement(choice):
                 # Save data to CSV
                 csv_data = np.column_stack([data['Voltage'], data['Current']])
                 file_management.save_csv(
-                    os.path.join(file_management.output_dir, "iv_curve_bidirectional.csv"),
+                    "iv_curve_bidirectional.csv",
                     csv_data,
                     "Voltage_V, Current_A"
                 )
                 
                 # Plot I-V curve
-                import matplotlib.pyplot as plt
                 plt.figure(figsize=(10, 6))
                 plt.plot(data['Voltage'], data['Current'] * 1e3, marker='o')
                 plt.xlabel('Voltage (V)')
@@ -681,7 +707,8 @@ def execute_pspa_measurement(choice):
                 plt.title('I-V Curve (Bidirectional)')
                 plt.grid(True)
                 plt.tight_layout()
-                plot_path = os.path.join(file_management.output_dir, "iv_curve_bidirectional.png")
+                file_management.ensure_output_dir(os.path.join(file_management.output_dir, "images"))
+                plot_path = file_management.uniquify(os.path.join(file_management.output_dir, "images", "iv_curve_bidirectional.png"))
                 plt.savefig(plot_path, dpi=300)
                 plt.close()
                 print(f"Plot saved: {plot_path}")
@@ -699,13 +726,13 @@ def execute_pspa_measurement(choice):
             # Pulsed I-V (Single Device)
             print("PSPA: Pulsed I-V (Single Device)")
             
-            v_base = float(input("Enter base voltage (V) [default 0]: ") or "0")
-            v_pulse = float(input("Enter pulse voltage (V) [default 5]: ") or "5")
-            pulse_width = float(input("Enter pulse width (µs) [default 100]: ") or "100") * 1e-6
-            pulse_period = float(input("Enter pulse period (ms) [default 10]: ") or "10") * 1e-3
-            num_pulses = int(input("Enter number of pulses [default 10]: ") or "10")
-            compliance = float(input("Enter current compliance (A) [default 0.1]: ") or "0.1")
-            channel = int(input("Enter channel number [default 1]: ") or "1")
+            v_base = safe_float_input("Enter base voltage (V) [default 0]: ", 0)
+            v_pulse = safe_float_input("Enter pulse voltage (V) [default 5]: ", 5)
+            pulse_width = safe_float_input("Enter pulse width (µs) [default 100]: ", 100) * 1e-6
+            pulse_period = safe_float_input("Enter pulse period (ms) [default 10]: ", 10) * 1e-3
+            num_pulses = safe_int_input("Enter number of pulses [default 10]: ", 10)
+            compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
+            channel = safe_int_input("Enter channel number [default 1]: ", 1)
             
             try:
                 pspa_inst = pspa.connect_pspa()
@@ -719,13 +746,12 @@ def execute_pspa_measurement(choice):
                 # Save data to CSV
                 csv_data = np.column_stack([data['Time'], data['Voltage'], data['Current']])
                 file_management.save_csv(
-                    os.path.join(file_management.output_dir, "pulsed_iv.csv"),
+                    "pulsed_iv.csv",
                     csv_data,
                     "Time_s, Voltage_V, Current_A"
                 )
                 
                 # Plot pulsed measurements
-                import matplotlib.pyplot as plt
                 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
                 
                 ax1.plot(data['Time'] * 1e3, data['Current'] * 1e3, marker='o')
@@ -741,7 +767,8 @@ def execute_pspa_measurement(choice):
                 ax2.grid(True)
                 
                 plt.tight_layout()
-                plot_path = os.path.join(file_management.output_dir, "pulsed_iv.png")
+                file_management.ensure_output_dir(os.path.join(file_management.output_dir, "images"))
+                plot_path = file_management.uniquify(os.path.join(file_management.output_dir, "images", "pulsed_iv.png"))
                 plt.savefig(plot_path, dpi=300)
                 plt.close()
                 print(f"Plot saved: {plot_path}")
@@ -758,19 +785,20 @@ def execute_pspa_measurement(choice):
         elif choice == 6:
             # Pulsed Transistor
             print("PSPA: Pulsed Transistor Measurement")
+            print("NOTE: Gate voltage is held constant (DC) while drain is pulsed.")
             
-            vds_base = float(input("Enter base Vds (V) [default 0]: ") or "0")
-            vds_pulse = float(input("Enter pulse Vds (V) [default 5]: ") or "5")
-            vgs_base = float(input("Enter base Vgs (V) [default 0]: ") or "0")
-            vgs_pulse = float(input("Enter pulse Vgs (V) [default 3]: ") or "3")
-            pulse_width = float(input("Enter pulse width (µs) [default 100]: ") or "100") * 1e-6
-            pulse_period = float(input("Enter pulse period (ms) [default 10]: ") or "10") * 1e-3
-            num_pulses = int(input("Enter number of pulses [default 10]: ") or "10")
-            compliance = float(input("Enter current compliance (A) [default 0.1]: ") or "0.1")
+            vds_base = safe_float_input("Enter base Vds (V) [default 0]: ", 0)
+            vds_pulse = safe_float_input("Enter pulse Vds (V) [default 5]: ", 5)
+            vgs_base = safe_float_input("Enter base Vgs (V) [default 0]: ", 0)
+            vgs_pulse = safe_float_input("Enter pulse Vgs (V) [default 3]: ", 3)
+            pulse_width = safe_float_input("Enter pulse width (µs) [default 100]: ", 100) * 1e-6
+            pulse_period = safe_float_input("Enter pulse period (ms) [default 10]: ", 10) * 1e-3
+            num_pulses = safe_int_input("Enter number of pulses [default 10]: ", 10)
+            compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
             
-            drain_ch = int(input("Enter drain channel [default 1]: ") or "1")
-            gate_ch = int(input("Enter gate channel [default 2]: ") or "2")
-            source_ch = int(input("Enter source channel [default 3]: ") or "3")
+            drain_ch = safe_int_input("Enter drain channel [default 1]: ", 1)
+            gate_ch = safe_int_input("Enter gate channel [default 2]: ", 2)
+            source_ch = safe_int_input("Enter source channel [default 3]: ", 3)
             
             try:
                 pspa_inst = pspa.connect_pspa()
@@ -785,13 +813,12 @@ def execute_pspa_measurement(choice):
                 # Save data to CSV
                 csv_data = np.column_stack([data['Time'], data['Id']])
                 file_management.save_csv(
-                    os.path.join(file_management.output_dir, "pulsed_transistor.csv"),
+                    "pulsed_transistor.csv",
                     csv_data,
                     "Time_s, Id_A"
                 )
                 
                 # Plot pulsed measurements
-                import matplotlib.pyplot as plt
                 plt.figure(figsize=(10, 6))
                 
                 plt.plot(data['Time'] * 1e3, data['Id'] * 1e3, marker='o', label='Id')
@@ -802,7 +829,8 @@ def execute_pspa_measurement(choice):
                 plt.legend()
                 
                 plt.tight_layout()
-                plot_path = os.path.join(file_management.output_dir, "pulsed_transistor.png")
+                file_management.ensure_output_dir(os.path.join(file_management.output_dir, "images"))
+                plot_path = file_management.uniquify(os.path.join(file_management.output_dir, "images", "pulsed_transistor.png"))
                 plt.savefig(plot_path, dpi=300)
                 plt.close()
                 print(f"Plot saved: {plot_path}")

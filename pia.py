@@ -8,14 +8,16 @@ Description: Contains all constants and functions for PIA measurements.
 import pyvisa
 import numpy as np
 
+# TODO: check actual needed inputs for each measurement, eg C-V does not need frequency
+
 # =============================
 # User settings and constants
 # =============================
 GPIB_ADDRESS = "GPIB0::24::INSTR"   # GPIB address for PIA
 
 # Default Frequency sweep settings (LOG sweep)
-FREQ_START_HZ = 1e4      # start frequency, Hz (>0 for LOG sweep)
-FREQ_STOP_HZ = 1e6       # stop frequency, Hz
+FREQ_START_HZ = 4e1      # start frequency, Hz (>0 for LOG sweep)
+FREQ_STOP_HZ = 5e6       # stop frequency, Hz
 NUM_POINTS = 201         # number of points in LOG sweep
 
 # Default DC bias options
