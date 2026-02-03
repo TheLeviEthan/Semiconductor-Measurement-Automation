@@ -49,6 +49,8 @@ def parse_args():
     return parser.parse_args()
 
 def main():
+    # TODO: add save path in CLI, first prompt should select tool
+
     args = parse_args()
     
     print("Welcome to the NRG Semiconductor Measurement Automation...\n")

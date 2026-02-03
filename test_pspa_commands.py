@@ -7,7 +7,7 @@ import pyvisa
 import time
 
 # Update this with your PSPA's GPIB address
-GPIB_ADDRESS = "GPIB0::17::INSTR"  # Change this to match your instrument
+GPIB_ADDRESS = "GPIB0::16::INSTR"  # Change this to match your instrument
 
 def test_commands():
     print("="*60)

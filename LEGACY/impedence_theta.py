@@ -24,8 +24,8 @@ from pathlib import Path
 GPIB_ADDRESS = "GPIB0::24::INSTR"  # Example: GPIB0, address 24
 
 # Frequency sweep settings (LOG sweep)
-FREQ_START_HZ = 1e3     # start frequency, Hz
-FREQ_STOP_HZ = 1e7      # stop frequency, Hz
+FREQ_START_HZ = 4e1     # start frequency, Hz
+FREQ_STOP_HZ = 5e6      # stop frequency, Hz
 NUM_POINTS = 201        # number of points in LOG sweep
 
 # DC bias options

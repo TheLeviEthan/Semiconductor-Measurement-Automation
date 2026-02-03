@@ -7,7 +7,7 @@ import pyvisa
 import time
 
 # UPDATE THIS with your actual GPIB address
-GPIB_ADDRESS = ""  # e.g., "GPIB0::17::INSTR"
+GPIB_ADDRESS = "GPIB0::16::INSTR"  # e.g., "GPIB0::17::INSTR"
 
 def test_4156c_commands():
     """Test SCPI commands for Agilent 4156C Precision Semiconductor Parameter Analyzer."""

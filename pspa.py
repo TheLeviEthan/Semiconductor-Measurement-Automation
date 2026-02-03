@@ -13,7 +13,7 @@ import time
 # =============================
 # User settings and constants
 # =============================
-GPIB_ADDRESS = ""   # Example: "GPIB0::17::INSTR"
+GPIB_ADDRESS = "GPIB0::16::INSTR"   # Example: "GPIB0::17::INSTR"
 
 # Global state to track SMU configuration (compliance, mode)
 # Keys: Channel int (1-4), Values: {'mode': 'VOLT', 'compliance': 0.1, 'range': 0}
@@ -22,6 +22,21 @@ SMU_CONFIG = {}
 # =============================
 # Connection and Initialization
 # =============================
+
+import re
+
+_NUM_RE = re.compile(r'([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)')
+
+def parse_flex_number(s: str) -> float:
+    """
+    Extract the *last* floating-point number from a FLEX reply.
+    Example: '128AI+5.331500E-11' -> 5.331500e-11
+    """
+    s = s.strip()
+    nums = _NUM_RE.findall(s)
+    if not nums:
+        raise ValueError(f"No numeric value found in reply: {s!r}")
+    return float(nums[-1])
 
 def list_visa_resources():
     """List all available VISA resources."""
@@ -104,22 +119,11 @@ def measure_channel_current(pspa, channel):
     # Range 0 = Auto Range [cite: 1303, 1409]
     try:
         result_str = pspa.query(f"TI? {channel},0")
-        # FLEX returns format: "N  <data>" where N is status. We need to parse.
-        # However, pyvisa query usually strips headers if configured, but FLEX headers are tricky.
-        # Typical response: "INA +1.2345E-03" (Header(3 chars) + Data)
-        # We assume FMT 1 was sent in init.
-        
-        # Simple float conversion handles the numeric part if header is clean space separated
-        # or we strip the first few characters if they are status codes.
-        # FMT 1: Header + Data [cite: 1302]
-        # Data usually starts after the status header (e.g. 'NAI', 'NAV').
-        # Splitting by space usually works.
-        parts = result_str.strip().split()
-        val = float(parts[-1]) 
-        return val
+        return parse_flex_number(result_str)
     except Exception as e:
         print(f"Error measuring current on CH{channel}: {e}")
         return 0.0
+
 
 # =============================
 # Source Configuration Functions
@@ -203,10 +207,10 @@ def measure_transistor_output_characteristics(pspa, vds_start, vds_stop, vds_ste
     vds_array = []
     vgs_array = []
     id_array = []
-    
-    vgs_values = np.arange(vgs_start, vgs_stop + vgs_step, vgs_step)
-    vds_values = np.arange(vds_start, vds_stop + vds_step, vds_step)
-    
+
+    vgs_values = sweep_values(vgs_start, vgs_stop, vgs_step)
+    vds_values = sweep_values(vds_start, vds_stop, vds_step)
+
     print("Starting Output Characteristics Sweep...")
     
     for vgs in vgs_values:
@@ -280,9 +284,9 @@ def measure_iv_curve(pspa, v_start, v_stop, v_step, channel=1, compliance=0.1):
     
     voltage_array = []
     current_array = []
-    
-    voltages = np.arange(v_start, v_stop + v_step, v_step)
-    
+
+    voltages = sweep_values(v_start, v_stop, v_step)
+
     for v in voltages:
         set_voltage(pspa, channel, v)
         i_val = measure_channel_current(pspa, channel)
@@ -299,12 +303,11 @@ def measure_iv_bidirectional(pspa, v_max, v_step, channel=1, compliance=0.1):
     
     voltage_array = []
     current_array = []
-    
-    sweep = np.concatenate([
-        np.arange(0, v_max + v_step, v_step),
-        np.arange(v_max - v_step, -v_max - v_step, -v_step),
-        np.arange(-v_max + v_step, 0 + v_step, v_step)
-    ])
+
+    up = sweep_values(0, v_max, v_step)
+    down = sweep_values(v_max - v_step, -v_max, -v_step)
+    back = sweep_values(-v_max + v_step, 0, v_step)
+    sweep = np.concatenate([up, down, back])
     
     for v in sweep:
         set_voltage(pspa, channel, v)
@@ -381,7 +384,7 @@ def measure_pulsed_iv(pspa, v_base, v_pulse, pulse_width, pulse_period, num_puls
         try:
             val_str = pspa.query("RMD? 1")
             # Parse result (Format: status header + value)
-            current_val = float(val_str.strip().split()[-1])
+            current_val = parse_flex_number(val_str)
         except:
             current_val = 0.0
             
@@ -398,6 +401,20 @@ def measure_pulsed_iv(pspa, v_base, v_pulse, pulse_width, pulse_period, num_puls
         'Voltage': np.array(voltage_array),
         'Current': np.array(current_array)
     }
+def sweep_values(start: float, stop: float, step: float) -> np.ndarray:
+    if step == 0:
+        raise ValueError("step must be non-zero")
+
+    n = int(round((stop - start) / step)) + 1
+    # Guard against sign mistakes
+    if n <= 0:
+        return np.array([], dtype=float)
+
+    vals = start + step * np.arange(n, dtype=float)
+
+    # Optional: hard-clip last value to exactly stop (prevents 1e-16 drift)
+    vals[-1] = stop
+    return vals
 
 def measure_pulsed_transistor(pspa, vds_pulse, vgs_pulse, vds_base, vgs_base,
                                pulse_width, pulse_period, num_pulses,
