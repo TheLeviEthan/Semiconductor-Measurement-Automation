@@ -138,7 +138,7 @@ def configure_smu(pspa, channel, mode='VOLT', compliance=0.1):
     SMU_CONFIG[channel] = {
         'mode': mode,
         'compliance': compliance,
-        'range': 0  # 0 = Auto Range [cite: 1409]
+        'range': 0  # 0 = Auto Range
     }
     # Enable the channel 
     # Note: FLEX 'CN' command enables specified channels.
@@ -239,6 +239,9 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
                                                  vds_constant,
                                                  drain_ch=1, gate_ch=2, source_ch=3,
                                                  compliance=0.1):
+    # Used to plot output current for sweep input voltage
+
+    # TODO: say which SMU is being used, bidirectional sweep
     configure_smu(pspa, drain_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, gate_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, source_ch, mode='VOLT', compliance=compliance)
