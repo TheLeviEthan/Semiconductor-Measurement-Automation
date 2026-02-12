@@ -82,7 +82,7 @@ def test_commands():
                 if not error.startswith('0,'):
                     print(f"   Instrument error: {error.strip()}")
                     pspa.write("*CLS")  # Clear the error
-            except:
+            except Exception:
                 pass
             
             time.sleep(0.1)

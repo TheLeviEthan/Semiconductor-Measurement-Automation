@@ -39,7 +39,7 @@ def main():
                 try:
                     idn = inst.query("*IDN?")
                     print(f"   ID: {idn.strip()}")
-                except:
+                except Exception:
                     print(f"   (Could not query *IDN?)")
                 
                 inst.close()
