@@ -98,7 +98,7 @@ def check_errors(pspa):
         if "No error" not in err_query and not err_query.startswith('+0'):
             print(f"Instrument error: {err_query.strip()}")
             errors.append(err_query.strip())
-    except:
+    except Exception:
         pass
     return errors
 
@@ -109,7 +109,7 @@ def disconnect_pspa(pspa):
         pspa.write("CL")
         # Return to SCPI mode (Page mode) [cite: 1316]
         pspa.write(":PAGE")
-    except:
+    except Exception:
         pass
     pspa.close()
     print("PSPA disconnected")
@@ -141,7 +141,7 @@ def configure_smu(pspa, channel, mode='VOLT', compliance=0.1):
     SMU_CONFIG[channel] = {
         'mode': mode,
         'compliance': compliance,
-        'range': 0  # 0 = Auto Range [cite: 1409]
+        'range': 0  # 0 = Auto Range
     }
     # Enable the channel 
     # Note: FLEX 'CN' command enables specified channels.
@@ -289,6 +289,7 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
                                                  vds_constant,
                                                  drain_ch=1, gate_ch=2, source_ch=3,
                                                  compliance=0.1):
+<<<<<<< HEAD:pspa.py
     # Validate inputs
     validate_channel(drain_ch)
     validate_channel(gate_ch)
@@ -296,6 +297,11 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
     validate_compliance(compliance)
     validate_step(vgs_step)
     
+=======
+    # Used to plot output current for sweep input voltage
+
+    # TODO: say which SMU is being used, bidirectional sweep
+>>>>>>> 1df40515fc51d674c57a930ca0d179473eed0b18:measurement functions/pspa.py
     configure_smu(pspa, drain_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, gate_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, source_ch, mode='VOLT', compliance=compliance)
@@ -309,7 +315,7 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
     id_array = []
     ig_array = []
     
-    vgs_values = np.arange(vgs_start, vgs_stop + vgs_step, vgs_step)
+    vgs_values = sweep_values(vgs_start, vgs_stop, vgs_step)
     
     print("Starting Transfer Characteristics Sweep...")
     
@@ -462,7 +468,11 @@ def measure_pulsed_iv(pspa, v_base, v_pulse, pulse_width, pulse_period, num_puls
             val_str = pspa.query("RMD? 1")
             # Parse result (Format: status header + value)
             current_val = parse_flex_number(val_str)
+<<<<<<< HEAD:pspa.py
         except:
+=======
+        except Exception:
+>>>>>>> 1df40515fc51d674c57a930ca0d179473eed0b18:measurement functions/pspa.py
             current_val = 0.0
             
         # Store Data
@@ -478,6 +488,20 @@ def measure_pulsed_iv(pspa, v_base, v_pulse, pulse_width, pulse_period, num_puls
         'Voltage': np.array(voltage_array),
         'Current': np.array(current_array)
     }
+def sweep_values(start: float, stop: float, step: float) -> np.ndarray:
+    if step == 0:
+        raise ValueError("step must be non-zero")
+
+    n = int(round((stop - start) / step)) + 1
+    # Guard against sign mistakes
+    if n <= 0:
+        return np.array([], dtype=float)
+
+    vals = start + step * np.arange(n, dtype=float)
+
+    # Optional: hard-clip last value to exactly stop (prevents 1e-16 drift)
+    vals[-1] = stop
+    return vals
 
 def measure_pulsed_transistor(pspa, vds_pulse, vgs_pulse, vds_base, vgs_base,
                                pulse_width, pulse_period, num_pulses,
@@ -535,8 +559,8 @@ def measure_pulsed_transistor(pspa, vds_pulse, vgs_pulse, vds_base, vgs_base,
         pspa.query("*OPC?")
         
         try:
-            val = float(pspa.query("RMD? 1").strip().split()[-1])
-        except:
+            val = parse_flex_number(pspa.query("RMD? 1"))
+        except Exception:
             val = 0.0
             
         time_array.append(i * pulse_period)
@@ -547,4 +571,163 @@ def measure_pulsed_transistor(pspa, vds_pulse, vgs_pulse, vds_base, vgs_base,
     return {
         'Time': np.array(time_array),
         'Id': np.array(id_array)
-    }   
+    }
+
+
+# =============================
+# Additional Measurement Functions
+# =============================
+
+def measure_diode_iv(pspa, v_start, v_stop, v_step, anode_ch=1, cathode_ch=2,
+                     compliance=0.1):
+    """
+    Measure diode I-V characteristics.
+
+    Sweeps voltage on the anode while grounding the cathode, measures
+    current through the anode at each bias point.
+
+    Returns:
+        dict with keys 'Voltage' (V) and 'Current' (A) as numpy arrays.
+    """
+    configure_smu(pspa, anode_ch, mode='VOLT', compliance=compliance)
+    configure_smu(pspa, cathode_ch, mode='VOLT', compliance=compliance)
+
+    set_voltage(pspa, cathode_ch, 0)
+    pspa.write(f"CN {anode_ch},{cathode_ch}")
+
+    voltages_arr = sweep_values(v_start, v_stop, v_step)
+    v_out = []
+    i_out = []
+
+    print("Starting Diode I-V sweep...")
+    for v in voltages_arr:
+        set_voltage(pspa, anode_ch, v)
+        i_val = measure_channel_current(pspa, anode_ch)
+        v_out.append(v)
+        i_out.append(i_val)
+
+    pspa.write("CL")
+    return {'Voltage': np.array(v_out), 'Current': np.array(i_out)}
+
+
+def measure_gate_leakage(pspa, vgs_start, vgs_stop, vgs_step,
+                         gate_ch=2, source_ch=3, compliance=1e-3):
+    """
+    Measure gate leakage current (Ig) as a function of Vgs.
+
+    Forces voltage on the gate channel while grounding the source,
+    and reads gate current at each step.
+
+    Returns:
+        dict with keys 'Vgs' (V) and 'Ig' (A) as numpy arrays.
+    """
+    configure_smu(pspa, gate_ch, mode='VOLT', compliance=compliance)
+    configure_smu(pspa, source_ch, mode='VOLT', compliance=compliance)
+
+    set_voltage(pspa, source_ch, 0)
+    pspa.write(f"CN {gate_ch},{source_ch}")
+
+    vgs_arr = sweep_values(vgs_start, vgs_stop, vgs_step)
+    vgs_out = []
+    ig_out = []
+
+    print("Starting Gate Leakage sweep...")
+    for vgs in vgs_arr:
+        set_voltage(pspa, gate_ch, vgs)
+        ig = measure_channel_current(pspa, gate_ch)
+        vgs_out.append(vgs)
+        ig_out.append(ig)
+
+    pspa.write("CL")
+    return {'Vgs': np.array(vgs_out), 'Ig': np.array(ig_out)}
+
+
+def measure_breakdown_voltage(pspa, v_start, v_stop, v_step, channel=1,
+                              compliance=1e-3, threshold_a=1e-4):
+    """
+    Sweep voltage upward until current exceeds *threshold_a*, indicating
+    breakdown.
+
+    Returns:
+        dict with keys 'Voltage', 'Current' (full sweep data) and
+        'breakdown_v' (float or None if threshold not reached).
+    """
+    configure_smu(pspa, channel, mode='VOLT', compliance=compliance)
+    output_on(pspa, channel)
+
+    voltages_arr = sweep_values(v_start, v_stop, v_step)
+    v_out = []
+    i_out = []
+    breakdown_v = None
+
+    print("Starting Breakdown Voltage sweep...")
+    for v in voltages_arr:
+        set_voltage(pspa, channel, v)
+        i_val = measure_channel_current(pspa, channel)
+        v_out.append(v)
+        i_out.append(i_val)
+        if abs(i_val) >= threshold_a and breakdown_v is None:
+            breakdown_v = v
+            print(f"  Breakdown detected at {v:.3f} V (I = {i_val:.4e} A)")
+            break  # stop to protect DUT
+
+    output_off(pspa, channel)
+    return {
+        'Voltage': np.array(v_out),
+        'Current': np.array(i_out),
+        'breakdown_v': breakdown_v,
+    }
+
+
+def measure_resistance(pspa, i_start, i_stop, i_step, channel=1,
+                       compliance=10.0):
+    """
+    Force current, measure voltage → compute resistance.
+
+    Sweeps current through *channel*, measures voltage at each step.
+    Returns V, I arrays and the computed R (Ohm) via least-squares fit.
+
+    Returns:
+        dict with keys 'Current' (A), 'Voltage' (V), and
+        'resistance_ohm' (float, slope of linear fit).
+    """
+    config_backup = SMU_CONFIG.get(channel, {}).copy()
+    configure_smu(pspa, channel, mode='CURR', compliance=compliance)
+    output_on(pspa, channel)
+
+    currents_arr = sweep_values(i_start, i_stop, i_step)
+    i_out = []
+    v_out = []
+
+    print("Starting Resistance measurement (force I, measure V)...")
+    for i_val in currents_arr:
+        set_current(pspa, channel, i_val)
+        # For measuring voltage in FLEX we re-read the forced channel
+        # TV? is not standard on 4155C in FLEX; we use 'TI?' to read the
+        # compliance-side measurement and derive voltage from I * R.
+        # Alternate approach: use two channels (force I on ch1, measure V
+        # across ch1-ch2).  Here we approximate with DI + TI.
+        v_str = pspa.query(f"TV? {channel},0")
+        v_val = parse_flex_number(v_str)
+        i_out.append(i_val)
+        v_out.append(v_val)
+
+    output_off(pspa, channel)
+    # Restore prior config
+    if config_backup:
+        SMU_CONFIG[channel] = config_backup
+
+    i_arr = np.array(i_out)
+    v_arr = np.array(v_out)
+    # Least-squares linear fit R = ΔV / ΔI
+    if len(i_arr) > 1:
+        coeffs = np.polyfit(i_arr, v_arr, 1)
+        resistance = coeffs[0]
+    else:
+        resistance = v_arr[0] / i_arr[0] if i_arr[0] != 0 else float('inf')
+
+    return {
+        'Current': i_arr,
+        'Voltage': v_arr,
+        'resistance_ohm': resistance,
+    }

@@ -1,0 +1,48 @@
+# ============================================================
+# Semiconductor Measurement Automation — Default Configuration
+# ============================================================
+# Edit this file to persist your lab's typical settings.
+# Values here override the hard-coded defaults in each module.
+# CLI prompts still let you override at runtime.
+
+# --- GPIB addresses ---
+gpib:
+  pia:  "GPIB0::24::INSTR"
+  pspa: "GPIB0::16::INSTR"
+  lcr:  "GPIB0::_____::INSTR"   # fill in when E4980A is on the bench
+
+# --- PIA (4294A) defaults ---
+pia:
+  freq_start_hz: 40
+  freq_stop_hz:  5.0e6
+  num_points:    201
+  apply_dc_bias: true
+  dc_bias_v:     0
+  osc_voltage_v: 0.5        # AC oscillator level (Vrms)
+  dc_range:      "M10"      # DC bias current range
+
+# --- PSPA (4155C/4156C) defaults ---
+pspa:
+  compliance_a:  0.1
+  drain_ch:      1
+  gate_ch:       2
+  source_ch:     3
+
+# --- LCR (E4980A) defaults ---
+lcr:
+  freq_default_hz: 1000
+  ac_level_v:      1.0
+  apply_dc_bias:   false
+  dc_bias_v:       0.0
+  sweep_points:    201
+  meas_time:       "MED"     # SHOR, MED, LONG, LONG2
+
+# --- Output ---
+output:
+  directory: ""              # leave empty to use default (../output)
+
+# --- Logging ---
+logging:
+  level: "INFO"              # DEBUG, INFO, WARNING, ERROR
+  log_to_file: true
+  log_filename: "measurement.log"

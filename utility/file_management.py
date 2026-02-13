@@ -1,5 +1,5 @@
 """
-Filename: File Managment.py
+Filename: file_management.py
 Author: Ethan Ruddell
 Date: 2025-01-20
 Description: Contains helper functions for file management tasks, ensuring 
@@ -8,9 +8,12 @@ output files.
 """
 import os
 import sys
+import logging
 import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt
+
+log = logging.getLogger(__name__)
 
 
 # File name definitions
@@ -28,8 +31,6 @@ output_dir = default_output_dir
 #=============================
 # Helper functions
 #=============================
-
-measurementType = ["Impedance vs Theta", "Capacitance vs Tan Loss", "Dielectric Measurements"]
 
 def uniquify(path_string):
     # TODO: date file naming
@@ -64,7 +65,7 @@ def save_csv(filename, data, header):
     """Save data array to a uniquified CSV file with header in output/csv folder."""
     ensure_output_dir(os.path.join(output_dir, "csv"))
     csv_path = uniquify(os.path.join(output_dir, "csv", filename))
-    print(f"Saving CSV to: {csv_path}")
+    log.info("Saving CSV to: %s", csv_path)
     np.savetxt(csv_path, data, delimiter=",", header=header, comments="")
     return csv_path
 
@@ -89,10 +90,40 @@ def save_image(title, axis1_label, axis1, axis2_label, axis2, APPLY_DC_BIAS=Fals
     plt.grid(True, which="both")
 
     image_path = uniquify(os.path.join(output_dir, "images", f"{title_with_bias}_plot.png"))
-    print(f"Saved image to: {image_path}")
+    log.info("Saved image to: %s", image_path)
     plt.savefig(image_path, dpi=300, bbox_inches="tight")
     plt.close()
     return image_path
+
+def save_plot(filename, fig=None, dpi=300):
+    """Save an already-constructed matplotlib figure to the images folder.
+
+    Use this when the caller builds a custom plot (subplots, multi-trace, etc.)
+    and only needs the path/uniquify logic handled.
+
+    Parameters
+    ----------
+    filename : str
+        Just the bare filename (e.g. ``"pulsed_iv.png"``).
+    fig : matplotlib Figure, optional
+        If *None*, the current ``plt`` figure is used.
+    dpi : int
+        Resolution for the saved image.
+
+    Returns
+    -------
+    str
+        The final path the image was saved to.
+    """
+    ensure_output_dir(os.path.join(output_dir, "images"))
+    image_path = uniquify(os.path.join(output_dir, "images", filename))
+    if fig is None:
+        plt.savefig(image_path, dpi=dpi, bbox_inches="tight")
+    else:
+        fig.savefig(image_path, dpi=dpi, bbox_inches="tight")
+    log.info("Saved image to: %s", image_path)
+    return image_path
+
 
 def save_cycle_plot(title, x_label, y_label, cycles_x, cycles_y, base_filename):
     """Save multi-cycle linear plot for stacked sweeps with unique filenames."""
@@ -108,7 +139,7 @@ def save_cycle_plot(title, x_label, y_label, cycles_x, cycles_y, base_filename):
     plt.legend()
 
     image_path = uniquify(os.path.join(output_dir, "images", base_filename))
-    print(f"Saved image to: {image_path}")
+    log.info("Saved image to: %s", image_path)
     plt.savefig(image_path, dpi=300, bbox_inches="tight")
     plt.close()
     return image_path
