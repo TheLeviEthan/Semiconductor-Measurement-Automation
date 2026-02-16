@@ -8,7 +8,11 @@ Description: Contains all constants and functions for PSPA measurements.
 
 import pyvisa
 import numpy as np
+import re
 import time
+import logging
+
+log = logging.getLogger(__name__)
 
 # =============================
 # User settings and constants
@@ -25,8 +29,6 @@ PULSE_CONFIG = {}
 # =============================
 # Connection and Initialization
 # =============================
-
-import re
 
 _NUM_RE = re.compile(r'([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)')
 
@@ -289,19 +291,9 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
                                                  vds_constant,
                                                  drain_ch=1, gate_ch=2, source_ch=3,
                                                  compliance=0.1):
-<<<<<<< HEAD:pspa.py
-    # Validate inputs
-    validate_channel(drain_ch)
-    validate_channel(gate_ch)
-    validate_channel(source_ch)
-    validate_compliance(compliance)
-    validate_step(vgs_step)
-    
-=======
     # Used to plot output current for sweep input voltage
 
     # TODO: say which SMU is being used, bidirectional sweep
->>>>>>> 1df40515fc51d674c57a930ca0d179473eed0b18:measurement functions/pspa.py
     configure_smu(pspa, drain_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, gate_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, source_ch, mode='VOLT', compliance=compliance)
@@ -468,11 +460,7 @@ def measure_pulsed_iv(pspa, v_base, v_pulse, pulse_width, pulse_period, num_puls
             val_str = pspa.query("RMD? 1")
             # Parse result (Format: status header + value)
             current_val = parse_flex_number(val_str)
-<<<<<<< HEAD:pspa.py
-        except:
-=======
         except Exception:
->>>>>>> 1df40515fc51d674c57a930ca0d179473eed0b18:measurement functions/pspa.py
             current_val = 0.0
             
         # Store Data
@@ -488,20 +476,6 @@ def measure_pulsed_iv(pspa, v_base, v_pulse, pulse_width, pulse_period, num_puls
         'Voltage': np.array(voltage_array),
         'Current': np.array(current_array)
     }
-def sweep_values(start: float, stop: float, step: float) -> np.ndarray:
-    if step == 0:
-        raise ValueError("step must be non-zero")
-
-    n = int(round((stop - start) / step)) + 1
-    # Guard against sign mistakes
-    if n <= 0:
-        return np.array([], dtype=float)
-
-    vals = start + step * np.arange(n, dtype=float)
-
-    # Optional: hard-clip last value to exactly stop (prevents 1e-16 drift)
-    vals[-1] = stop
-    return vals
 
 def measure_pulsed_transistor(pspa, vds_pulse, vgs_pulse, vds_base, vgs_base,
                                pulse_width, pulse_period, num_pulses,

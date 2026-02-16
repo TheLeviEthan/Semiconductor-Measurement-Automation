@@ -7,8 +7,9 @@ Description: Contains all constants and functions for PIA measurements.
 
 import pyvisa
 import numpy as np
+import logging
 
-# TODO: check actual needed inputs for each measurement, eg C-V does not need frequency
+log = logging.getLogger(__name__)
 
 # =============================
 # User settings and constants
@@ -37,12 +38,6 @@ current_parameters = {
     "dc_bias_v": DC_BIAS_V,
 }
 
-# =============================
-# Relevant VARIABLES for access
-# =============================
-freq_axis = None  # Placeholder for measurement data storage
-cap_vals = None   # Placeholder for measurement data storage
-d_vals = None     # Placeholder for measurement data storage
 
 # =============================
 # Setup Functions
@@ -56,61 +51,58 @@ def connect_4294a(resource_name=GPIB_ADDRESS):
     inst.write_termination = '\n'
     return inst
 
-def initialize_4294a_for_cpd(inst):
+def _initialize_4294a(inst, meas_mode="CPD", osc_level=0.5):
     """
-    Basic initialization for Cp–D measurement:
+    Generic 4294A initialization:
     - Reset & clear
     - Internal trigger
-    - Cp–D mode
+    - Set measurement mode
+    - ASCII data transfer
+    - Set oscillator level
+    - Set DC bias configuration
+
+    Args:
+        inst: VISA instrument instance
+        meas_mode: Measurement type string for the MEAS command
+                   "CPD" = Cp-D, "ZTD" = Z-θ, "RX" = R-X,
+                   "GB" = G-B, "YTD" = Y-θ
+        osc_level: AC oscillator level in Vrms (default 0.5)
     """
     inst.write("*RST")
     inst.write("*CLS")
-
-    # Internal trigger
     inst.write("TRGS INT")
-
-    # Cp–D measurement: Cp-D (trace A = Cp, trace B = D)
-    # This matches your earlier code that used "MEAS CPD"
-    inst.write("MEAS CPD")
-
-    # ASCII data transfer
+    inst.write(f"MEAS {meas_mode}")
     inst.write("FORM4")
-
-    # Oscillator: voltage mode and level (0.5 V RMS)
     inst.write("POWMOD VOLT")
-    inst.write("POWE 0.5")  # 0.5 V rms AC level
-
-    # DC bias configuration (voltage mode)
+    inst.write(f"POWE {osc_level}")
     inst.write("DCMOD VOLT")
-    inst.write("DCRNG M10")  # 10 mA bias range (example)
+    inst.write("DCRNG M10")
+
+
+# Convenience wrappers — thin calls to _initialize_4294a
+def initialize_4294a_for_cpd(inst):
+    """Initialize for Cp-D measurement (trace A = Cp, trace B = D)."""
+    _initialize_4294a(inst, "CPD", osc_level=0.5)
+
 
 def initialize_4294a_for_impedance(inst):
-    """
-    Basic initialization for impedance |Z| – θ measurement:
-    - Reset & clear
-    - Internal trigger
-    - Z-θ mode
-    """
-    inst.write("*RST")
-    inst.write("*CLS")
+    """Initialize for Z-θ measurement (trace A = |Z|, trace B = θ)."""
+    _initialize_4294a(inst, "ZTD", osc_level=0.1)
 
-    # Internal trigger
-    inst.write("TRGS INT")
 
-    # Impedance measurement: Z-Theta (trace A = |Z|, trace B = θ)
-    # (SCPI name may vary by firmware; ZTD is common on 4294A)
-    inst.write("MEAS ZTD")
+def initialize_4294a_for_rx(inst):
+    """Initialize for R-X measurement (trace A = R, trace B = X)."""
+    _initialize_4294a(inst, "RX", osc_level=0.5)
 
-    # ASCII data transfer
-    inst.write("FORM4")
 
-    # Oscillator: voltage mode and level (e.g. 100 mV RMS)
-    inst.write("POWMOD VOLT")
-    inst.write("POWE 0.1")  # 0.1 V rms AC level
+def initialize_4294a_for_gb(inst):
+    """Initialize for G-B measurement (trace A = G, trace B = B)."""
+    _initialize_4294a(inst, "GB", osc_level=0.5)
 
-    # DC bias configuration (voltage mode)
-    inst.write("DCMOD VOLT")
-    inst.write("DCRNG M10")  # 10 mA bias range (example)
+
+def initialize_4294a_for_ytd(inst):
+    """Initialize for Y-θ measurement (trace A = |Y|, trace B = θ)."""
+    _initialize_4294a(inst, "YTD", osc_level=0.5)
 
 
 def configure_dc_bias(inst, apply_bias, dc_bias_v):
@@ -339,13 +331,6 @@ def prompt_for_parameter_duplication():
     return dup_input == 'y'
 
 
-def set_frequency_sweep_with_params(inst, freq_start, freq_stop, num_points):
-    """
-    Configure a LOG frequency sweep using provided parameters.
-    Wrapper around set_frequency_sweep with explicit parameters.
-    """
-    set_frequency_sweep(inst, freq_start, freq_stop, num_points)
-
 
 # =============================
 # Dielectric C–V Measurement Helpers
@@ -369,16 +354,6 @@ def set_frequency(inst, freq_hz):
     inst.write(f"CWFREQ {freq_hz}")
 
 
-def read_trace_cp(inst):
-    """
-    Read Cp trace from active trace.
-    OUTPDTRC? returns [val, sub, val, sub, ...].
-    For Cp-D, Cp is trace A, D is trace B. We read Cp on active trace.
-    """
-    data_str = inst.query("OUTPDTRC?")
-    data = np.array([float(x) for x in data_str.split(',') if x.strip() != ""])
-    cp = data[0::2]  # take every 2nd element starting at index 0 (main reading)
-    return cp
 
 
 def compute_eps_r(cp_array, thickness_nm, diameter_um):
@@ -414,14 +389,14 @@ def measure_single_cv_cycle(inst, freq_hz, v_min, v_max, n_points):
     inst.write("TRAC A")
     inst.write("AUTO")
     v_up = read_sweep_axis(inst)
-    cp_up = read_trace_cp(inst)
+    cp_up = read_trace_main(inst, trace="A")
 
     # Sweep DOWN: v_max → v_min
     set_dc_bias_sweep(inst, v_min, v_max, n_points, direction="DOWN")
     inst.write("TRAC A")
     inst.write("AUTO")
     v_down = read_sweep_axis(inst)
-    cp_down = read_trace_cp(inst)
+    cp_down = read_trace_main(inst, trace="A")
 
     # Combine into a single "butterfly" trace in actual sweep order
     v_full = np.concatenate([v_up, v_down])
@@ -445,7 +420,7 @@ def measure_eps_vs_freq(inst, freq_start, freq_stop, freq_points, bias_voltage=0
     inst.write("AUTO")
 
     freq_axis = read_sweep_axis(inst)
-    cp_freq = read_trace_cp(inst)
+    cp_freq = read_trace_main(inst, trace="A")
 
     return freq_axis, cp_freq
 
@@ -454,52 +429,28 @@ def measure_eps_vs_freq(inst, freq_start, freq_stop, freq_points, bias_voltage=0
 # Additional Measurement Modes
 # =============================
 
-def initialize_4294a_for_rx(inst):
-    """
-    Initialize 4294A for R–X (resistance–reactance) measurement:
-    Trace A = R, Trace B = X.
-    """
-    inst.write("*RST")
-    inst.write("*CLS")
-    inst.write("TRGS INT")
-    inst.write("MEAS RX")
-    inst.write("FORM4")
-    inst.write("POWMOD VOLT")
-    inst.write("POWE 0.5")
-    inst.write("DCMOD VOLT")
-    inst.write("DCRNG M10")
 
+def _measure_two_trace_vs_freq(inst, freq_start=None, freq_stop=None, num_points=None):
+    """
+    Generic LOG frequency sweep reading both traces A and B.
 
-def initialize_4294a_for_gb(inst):
+    Returns:
+        tuple: (freq_axis, trace_a_vals, trace_b_vals)
     """
-    Initialize 4294A for G–B (conductance–susceptance) measurement:
-    Trace A = G, Trace B = B.
-    """
-    inst.write("*RST")
-    inst.write("*CLS")
-    inst.write("TRGS INT")
-    inst.write("MEAS GB")
-    inst.write("FORM4")
-    inst.write("POWMOD VOLT")
-    inst.write("POWE 0.5")
-    inst.write("DCMOD VOLT")
-    inst.write("DCRNG M10")
+    if freq_start is None:
+        freq_start = FREQ_START_HZ
+    if freq_stop is None:
+        freq_stop = FREQ_STOP_HZ
+    if num_points is None:
+        num_points = NUM_POINTS
 
+    set_frequency_sweep(inst, freq_start, freq_stop, num_points)
+    single_sweep_and_wait(inst)
 
-def initialize_4294a_for_ytd(inst):
-    """
-    Initialize 4294A for Y–θ (admittance magnitude–phase) measurement:
-    Trace A = |Y|, Trace B = θ (degrees).
-    """
-    inst.write("*RST")
-    inst.write("*CLS")
-    inst.write("TRGS INT")
-    inst.write("MEAS YTD")
-    inst.write("FORM4")
-    inst.write("POWMOD VOLT")
-    inst.write("POWE 0.5")
-    inst.write("DCMOD VOLT")
-    inst.write("DCRNG M10")
+    freq_axis = read_sweep_axis(inst)
+    a_vals = read_trace_main(inst, trace="A")
+    b_vals = read_trace_main(inst, trace="B")
+    return freq_axis, a_vals, b_vals
 
 
 def measure_rx_vs_freq(inst, freq_start=None, freq_stop=None, num_points=None):
@@ -509,20 +460,7 @@ def measure_rx_vs_freq(inst, freq_start=None, freq_stop=None, num_points=None):
     Returns:
         tuple: (freq_axis, r_vals, x_vals)
     """
-    if freq_start is None:
-        freq_start = FREQ_START_HZ
-    if freq_stop is None:
-        freq_stop = FREQ_STOP_HZ
-    if num_points is None:
-        num_points = NUM_POINTS
-
-    set_frequency_sweep(inst, freq_start, freq_stop, num_points)
-    single_sweep_and_wait(inst)
-
-    freq_axis = read_sweep_axis(inst)
-    r_vals = read_trace_main(inst, trace="A")
-    x_vals = read_trace_main(inst, trace="B")
-    return freq_axis, r_vals, x_vals
+    return _measure_two_trace_vs_freq(inst, freq_start, freq_stop, num_points)
 
 
 def measure_gb_vs_freq(inst, freq_start=None, freq_stop=None, num_points=None):
@@ -532,20 +470,7 @@ def measure_gb_vs_freq(inst, freq_start=None, freq_stop=None, num_points=None):
     Returns:
         tuple: (freq_axis, g_vals, b_vals)
     """
-    if freq_start is None:
-        freq_start = FREQ_START_HZ
-    if freq_stop is None:
-        freq_stop = FREQ_STOP_HZ
-    if num_points is None:
-        num_points = NUM_POINTS
-
-    set_frequency_sweep(inst, freq_start, freq_stop, num_points)
-    single_sweep_and_wait(inst)
-
-    freq_axis = read_sweep_axis(inst)
-    g_vals = read_trace_main(inst, trace="A")
-    b_vals = read_trace_main(inst, trace="B")
-    return freq_axis, g_vals, b_vals
+    return _measure_two_trace_vs_freq(inst, freq_start, freq_stop, num_points)
 
 
 def measure_ytd_vs_freq(inst, freq_start=None, freq_stop=None, num_points=None):
@@ -555,17 +480,4 @@ def measure_ytd_vs_freq(inst, freq_start=None, freq_stop=None, num_points=None):
     Returns:
         tuple: (freq_axis, y_mag, y_theta_deg)
     """
-    if freq_start is None:
-        freq_start = FREQ_START_HZ
-    if freq_stop is None:
-        freq_stop = FREQ_STOP_HZ
-    if num_points is None:
-        num_points = NUM_POINTS
-
-    set_frequency_sweep(inst, freq_start, freq_stop, num_points)
-    single_sweep_and_wait(inst)
-
-    freq_axis = read_sweep_axis(inst)
-    y_mag = read_trace_main(inst, trace="A")
-    y_theta_deg = read_trace_main(inst, trace="B")
-    return freq_axis, y_mag, y_theta_deg
+    return _measure_two_trace_vs_freq(inst, freq_start, freq_stop, num_points)

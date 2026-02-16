@@ -1,0 +1,1466 @@
+================================================================================
+SEMICONDUCTOR MEASUREMENT AUTOMATION - TOOLS AND MEASUREMENTS REFERENCE
+================================================================================
+Project: Semiconductor Measurement Automation
+Author: Ethan Ruddell
+Date: 2026-02-13
+
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+0. TOOL 0: CRYO (Cryocon 32B) - Temperature Controller
+1. TOOL 1: LCR (E4980A) - Impedance Analyzer
+2. TOOL 2: PIA (4294A) - Precision Impedance Analyzer
+3. TOOL 3: PSPA (4155C/4156C) - Parameter/Semiconductor Analyzer
+4. Configuration Defaults
+5. Code Architecture
+
+
+================================================================================
+0. TOOL 0: CRYO (CRYOCON 32B) - TEMPERATURE CONTROLLER
+================================================================================
+Instrument: Cryocon 32B Temperature Controller
+GPIB Address Default: "GPIB0::___::INSTR" (to be configured)
+Module: measurement functions/cryo.py
+
+
+--------------------------------------------------------------------------------
+0.1 OVERVIEW
+--------------------------------------------------------------------------------
+The Cryocon 32B enables temperature-dependent measurements with other instruments.
+Users can configure a temperature sweep and any measurement from PIA, PSPA, or LCR
+will be automatically repeated at specified temperature intervals.
+
+Workflow:
+1. Select "CRYO" from the main menu
+2. Enter temperature sweep parameters
+3. Select a measurement tool (PIA, PSPA, or LCR)
+4. Select the specific measurement to run
+5. The system will:
+   - Ramp to each temperature sequentially
+   - Wait for thermal stabilization
+   - Execute the measurement
+   - Save data with temperature annotation
+
+
+--------------------------------------------------------------------------------
+0.2 TEMPERATURE CONTROL LIMITS AND DEFAULTS
+--------------------------------------------------------------------------------
+
+Parameter: Temperature Range
+  - Minimum: 1.4 K
+  - Maximum: 325 K
+  - Unit: Kelvin (K)
+
+Parameter: Start Temperature
+  - Default: 100.0 K
+  - Unit: K
+  - Range: 1.4 K to 325 K
+
+Parameter: End Temperature
+  - Default: 200.0 K
+  - Unit: K
+  - Range: 1.4 K to 325 K
+
+Parameter: Ramp Rate
+  - Range: 0.1 K/min to 50 K/min (depends on cooling system)
+  - Default: 5.0 K/min
+  - Unit: K/min
+  - Description: Temperature change rate during ramp
+
+Parameter: Measurement Interval
+  - Minimum: 1.0 K
+  - Default: 10.0 K
+  - Unit: K
+  - Description: Temperature spacing between measurements
+
+Parameter: Temperature Stability Parameters
+  - Tolerance: ±0.5 K (adjustable)
+  - Stability Time: 30 seconds
+  - Description: Temperature must be within tolerance for stabilization period
+
+
+--------------------------------------------------------------------------------
+0.3 CRYOGENIC MEASUREMENT PARAMETERS
+--------------------------------------------------------------------------------
+
+Function: get_cryogenic_parameters()
+
+User Inputs (Interactive Prompts):
+  1. Start temperature (K)
+     Default: 100.0 K
+     Range: 1.4 K to 325 K
+  
+  2. End temperature (K)
+     Default: 200.0 K
+     Range: 1.4 K to 325 K
+  
+  3. Ramp rate (K/min)
+     Default: 5.0 K/min
+     Range: 0.1 K/min to 50 K/min
+  
+  4. Measurement interval (K)
+     Default: 10.0 K
+     Range: ≥1.0 K
+
+Outputs (dict):
+  - 'start_k': Start temperature (K)
+  - 'end_k': End temperature (K)
+  - 'ramp_rate_k_per_min': Ramp rate (K/min)
+  - 'meas_interval_k': Measurement interval (K)
+  - 'temp_points': Array of all temperature measurement points (K)
+
+System Calculations:
+  - Total measurement points calculated automatically
+  - Estimated sweep time: |End - Start| / Ramp Rate (minutes)
+  - Temperature points generated using linear spacing
+
+
+--------------------------------------------------------------------------------
+0.4 TEMPERATURE CONTROL FUNCTIONS
+--------------------------------------------------------------------------------
+
+0.4.1 Get Current Temperature
+-------------------------------------------------------------------------------
+Function: get_current_temperature(cryo, loop=1)
+
+Inputs:
+  - cryo: VISA instrument instance (required)
+  - loop: Control loop number (optional, default 1)
+     Options: 1 or 2
+
+Outputs:
+  - Temperature: Float value in Kelvin (K)
+
+Description:
+  - Reads current temperature from sensor
+  - Returns None on error
+
+
+0.4.2 Set Temperature Setpoint
+-------------------------------------------------------------------------------
+Function: set_temperature_setpoint(cryo, temp_k, loop=1)
+
+Inputs:
+  - cryo: VISA instrument instance (required)
+  - temp_k: Target temperature (K, required)
+     Range: 1.4 K to 325 K
+  - loop: Control loop number (optional, default 1)
+
+Description:
+  - Sets the target temperature for the specified control loop
+  - Clamps input to valid range if out of bounds
+  - Non-blocking (returns immediately)
+
+
+0.4.3 Set Temperature Ramp Rate
+-------------------------------------------------------------------------------
+Function: set_ramp_rate(cryo, ramp_k_per_min, loop=1)
+
+Inputs:
+  - cryo: VISA instrument instance (required)
+  - ramp_k_per_min: Ramp rate (K/min, required)
+     Range: 0.1 K/min to 50 K/min
+  - loop: Control loop number (optional, default 1)
+
+Description:
+  - Sets the rate at which temperature changes
+  - Enables ramping mode on the specified loop
+  - Clamps input to valid range if out of bounds
+
+
+0.4.4 Wait for Temperature Stabilization
+-------------------------------------------------------------------------------
+Function: wait_for_temperature(cryo, target_temp_k, tolerance_k=0.5, 
+                               max_wait_s=3600, stability_time_s=30, loop=1)
+
+Inputs:
+  - cryo: VISA instrument instance (required)
+  - target_temp_k: Target temperature (K, required)
+  - tolerance_k: Temperature tolerance (K, optional, default 0.5)
+  - max_wait_s: Maximum wait time (seconds, optional, default 3600)
+  - stability_time_s: Required stability duration (seconds, optional, default 30)
+  - loop: Control loop number (optional, default 1)
+
+Outputs:
+  - bool: True if temperature reached and stable, False if timeout
+
+Description:
+  - Blocks until temperature reaches setpoint within tolerance
+  - Requires temperature to remain stable for specified duration
+  - Checks temperature every 2 seconds
+  - Returns after:
+    1. Temp within tolerance for ≥ stability_time_s, OR
+    2. max_wait_s elapsed (returns False on timeout)
+
+
+0.4.5 Generate Temperature Sweep Points
+-------------------------------------------------------------------------------
+Function: generate_temperature_sweep_points(start_k, end_k, interval_k)
+
+Inputs:
+  - start_k: Start temperature (K, required)
+  - end_k: End temperature (K, required)
+  - interval_k: Interval between points (K, required)
+
+Outputs:
+  - numpy array: Temperature points in order (start → end)
+
+Description:
+  - Generates linear array of temperature measurement points
+  - Handles both warming and cooling sweeps
+  - Ensures start and end points are included
+  - Points are unique and sorted
+
+
+0.4.6 Disable Ramp Mode
+-------------------------------------------------------------------------------
+Function: disable_ramp(cryo, loop=1)
+
+Inputs:
+  - cryo: VISA instrument instance (required)
+  - loop: Control loop number (optional, default 1)
+
+Description:
+  - Returns loop to manual/hold mode
+  - Freezes current temperature setpoint
+  - Used during shutdown
+
+
+--------------------------------------------------------------------------------
+0.5 WORKFLOW INTEGRATION WITH OTHER TOOLS
+--------------------------------------------------------------------------------
+
+When CRYO is selected from the main menu:
+
+1. User is prompted for temperature sweep parameters:
+   - Start temperature (K)
+   - End temperature (K)
+   - Ramp rate (K/min)
+   - Measurement interval (K)
+
+2. System calculates measurement points and time estimate
+
+3. User selects measurement tool: PIA, PSPA, or LCR
+
+4. User selects specific measurement from that tool
+
+5. For EACH temperature point:
+   a. Cryocon ramps to target temperature
+   b. System waits for thermal stabilization
+   c. Measurement executes at that temperature
+   d. Data saved with temperature annotation
+   e. Loop continues to next temperature point
+
+6. After all temperatures complete:
+   - Cryocon disables ramp mode
+   - System disconnects from Cryocon
+   - All data files saved in output directory
+
+
+--------------------------------------------------------------------------------
+0.6 IMPORTANT NOTES
+--------------------------------------------------------------------------------
+
+Control Loops:
+  - Cryocon 32B has 2 control loops
+  - Current implementation uses Loop 1 (CH1)
+  - Loop 1 requires appropriate sensor type
+
+Temperature Ramp Behavior:
+  - Actual ramp time depends on cooling system capacity
+  - User-specified ramp rate is a request, not a guarantee
+  - System monitors actual temperature and waits for setpoint reach
+
+Measurement Timing:
+  - Total measurement time = (ramp time) + (measurement time × num_points)
+  - Ramp time estimate = |End - Start| / Ramp Rate
+  - Does not account for stabilization wait time
+
+Data Files:
+  - Each measurement saved with temperature annotation
+  - CSV includes temperature_K column
+  - PNG plots labeled with temperature
+  - Can concatenate multiple temperature runs
+
+Cooling System:
+  - Maximum ramp rate depends on your cryogenic system
+  - Consult your system manual for realistic limits
+  - Default 5 K/min is conservative and widely compatible
+
+
+================================================================================
+1. TOOL 1: LCR (E4980A) - IMPEDANCE ANALYZER
+================================================================================
+Instrument: Agilent/Keysight E4980A LCR Meter
+GPIB Address Default: "GPIB0::_____::INSTR" (to be configured)
+Module: measurement functions/lcr.py
+
+
+--------------------------------------------------------------------------------
+1.1 MEASUREMENT MODES
+--------------------------------------------------------------------------------
+The E4980A supports multiple measurement functions:
+- CPD: Cp-D (parallel capacitance - dissipation factor)
+- CPRP: Cp-Rp (parallel capacitance - parallel resistance)
+- CPQ: Cp-Q (parallel capacitance - quality factor)
+- CPG: Cp-G (parallel capacitance - conductance)
+- CSRS: Cs-Rs (series capacitance - series resistance)
+- CSD: Cs-D (series capacitance - dissipation factor)
+- ZTD: Z-θ (impedance magnitude - phase in degrees)
+- ZTR: Z-θr (impedance magnitude - phase in radians)
+- GB: G-B (conductance - susceptance)
+- YTD: Y-θ (admittance magnitude - phase)
+- RX: R-X (resistance - reactance)
+- LPQ: Lp-Q (parallel inductance - quality factor)
+- LSD: Ls-D (series inductance - dissipation factor)
+
+
+--------------------------------------------------------------------------------
+1.2 GLOBAL PARAMETERS
+--------------------------------------------------------------------------------
+
+Parameter: Frequency
+  - Range: 20 Hz to 2 MHz
+  - Default: 1000 Hz (1 kHz)
+  - Unit: Hz
+  - Function: set_frequency(inst, freq_hz)
+
+Parameter: AC Signal Level
+  - Range: 0 to 20 V
+  - Default: 1.0 V
+  - Unit: V (RMS)
+  - Function: set_ac_level(inst, ac_level_v)
+
+Parameter: DC Bias
+  - Range: -40 V to +40 V
+  - Default Enable: False
+  - Default Voltage: 0.0 V
+  - Unit: V (DC)
+  - Function: configure_dc_bias(inst, apply_bias, dc_bias_v)
+
+Parameter: Integration Time (Aperture)
+  - Options: "SHOR" (short), "MED" (medium), "LONG", "LONG2"
+  - Default: "MED"
+  - Function: set_integration_time(inst, time_setting)
+
+Parameter: Sweep Points
+  - Default: 201
+  - Function: Used in sweep measurements
+
+
+--------------------------------------------------------------------------------
+1.3 MEASUREMENTS
+--------------------------------------------------------------------------------
+
+1.3.1 Single Point Measurement
+-------------------------------------------------------------------------------
+Function: measure_single_point(inst)
+
+Inputs:
+  - inst: VISA instrument instance (required)
+  - Uses current instrument settings:
+    * Frequency (Hz)
+    * AC level (V)
+    * DC bias (V)
+    * Measurement function (CPD, ZTD, etc.)
+
+Outputs:
+  - primary_value (unit depends on measurement mode)
+  - secondary_value (unit depends on measurement mode)
+  - Example for CPD: (Cp in F, D dimensionless)
+  - Example for ZTD: (Z in Ω, θ in degrees)
+
+
+1.3.2 Impedance Measurement
+-------------------------------------------------------------------------------
+Function: measure_impedance(inst, freq_hz=None)
+
+Inputs:
+  - inst: VISA instrument instance (required)
+  - freq_hz: Measurement frequency in Hz (optional, uses current if None)
+
+Outputs:
+  - Z_magnitude: Impedance magnitude (Ω)
+  - theta_degrees: Phase angle (degrees)
+
+
+1.3.3 Capacitance Measurement
+-------------------------------------------------------------------------------
+Function: measure_capacitance(inst, freq_hz=None, mode="CPD")
+
+Inputs:
+  - inst: VISA instrument instance (required)
+  - freq_hz: Measurement frequency in Hz (optional)
+  - mode: Measurement mode string (optional, default "CPD")
+    Options: "CPD", "CPRP", "CPG", "CSRS", "CSD"
+
+Outputs:
+  - capacitance: Capacitance value (F)
+  - secondary_parameter: Depends on mode
+    * CPD: D (dissipation factor, dimensionless)
+    * CPRP: Rp (parallel resistance, Ω)
+    * CPG: G (conductance, S)
+    * CSRS: Rs (series resistance, Ω)
+    * CSD: D (dissipation factor, dimensionless)
+
+
+1.3.4 Inductance Measurement
+-------------------------------------------------------------------------------
+Function: measure_inductance(inst, freq_hz=None, mode="LPQ")
+
+Inputs:
+  - inst: VISA instrument instance (required)
+  - freq_hz: Measurement frequency in Hz (optional)
+  - mode: Measurement mode string (optional, default "LPQ")
+    Options: "LPQ", "LSD", "LPRP", "LSRS"
+
+Outputs:
+  - inductance: Inductance value (H)
+  - secondary_parameter: Depends on mode
+    * LPQ: Q (quality factor, dimensionless)
+    * LSD: D (dissipation factor, dimensionless)
+
+
+1.3.5 Frequency Sweep Measurement
+-------------------------------------------------------------------------------
+Function: measure_frequency_sweep(inst, start_freq, stop_freq, num_points, 
+                                   sweep_type="LOG", measurement_function="CPD")
+
+Inputs:
+  - inst: VISA instrument instance (required)
+  - start_freq: Start frequency (Hz, required)
+  - stop_freq: Stop frequency (Hz, required)
+  - num_points: Number of sweep points (integer, required)
+  - sweep_type: "LIN" or "LOG" (optional, default "LOG")
+  - measurement_function: Measurement type (optional, default "CPD")
+
+Outputs:
+  - freq_array: Array of frequencies (Hz)
+  - primary_array: Array of primary parameter values
+  - secondary_array: Array of secondary parameter values
+  - Units depend on measurement_function
+
+
+1.3.6 Impedance vs. Frequency
+-------------------------------------------------------------------------------
+Function: measure_impedance_vs_frequency(inst, start_freq, stop_freq, 
+                                         num_points, sweep_type="LOG")
+
+Inputs:
+  - inst: VISA instrument instance (required)
+  - start_freq: Start frequency (Hz, required)
+  - stop_freq: Stop frequency (Hz, required)
+  - num_points: Number of sweep points (integer, required)
+  - sweep_type: "LIN" or "LOG" (optional, default "LOG")
+
+Outputs:
+  - freq_array: Array of frequencies (Hz)
+  - z_magnitude: Array of impedance magnitudes (Ω)
+  - theta_degrees: Array of phase angles (degrees)
+
+
+1.3.7 Capacitance vs. Frequency
+-------------------------------------------------------------------------------
+Function: measure_capacitance_vs_frequency(inst, start_freq, stop_freq, 
+                                           num_points, sweep_type="LOG", 
+                                           mode="CPD")
+
+Inputs:
+  - inst: VISA instrument instance (required)
+  - start_freq: Start frequency (Hz, required)
+  - stop_freq: Stop frequency (Hz, required)
+  - num_points: Number of sweep points (integer, required)
+  - sweep_type: "LIN" or "LOG" (optional, default "LOG")
+  - mode: Measurement mode (optional, default "CPD")
+
+Outputs:
+  - freq_array: Array of frequencies (Hz)
+  - capacitance_vals: Array of capacitance values (F)
+  - secondary_vals: Array of secondary parameter values
+    * For CPD: D (dissipation factor, dimensionless)
+
+
+1.3.8 C-V Sweep (Capacitance vs. Voltage)
+-------------------------------------------------------------------------------
+Function: measure_cv_sweep(inst, freq_hz, v_min, v_max, num_points)
+
+Inputs:
+  - inst: VISA instrument instance (required)
+  - freq_hz: Measurement frequency (Hz, required)
+  - v_min: Minimum DC bias voltage (V, required)
+  - v_max: Maximum DC bias voltage (V, required)
+  - num_points: Number of voltage points (integer, required)
+
+Outputs:
+  - voltage_array: Array of DC bias voltages (V)
+  - capacitance_array: Array of capacitance values (F)
+  - dissipation_array: Array of dissipation factor values (dimensionless)
+
+
+1.3.9 C-V Butterfly (Bidirectional C-V)
+-------------------------------------------------------------------------------
+Function: measure_cv_butterfly(inst, freq_hz, v_min, v_max, num_points)
+
+Inputs:
+  - inst: VISA instrument instance (required)
+  - freq_hz: Measurement frequency (Hz, required)
+  - v_min: Minimum DC bias voltage (V, required)
+  - v_max: Maximum DC bias voltage (V, required)
+  - num_points: Number of voltage points per direction (integer, required)
+
+Outputs:
+  - voltage_full: Array of DC bias voltages (V)
+    Contains concatenated up sweep (v_min → v_max) and down sweep (v_max → v_min)
+  - capacitance_full: Array of capacitance values (F)
+  - dissipation_full: Array of dissipation factor values (dimensionless)
+
+
+1.3.10 Quality Factor vs. Frequency
+-------------------------------------------------------------------------------
+Function: measure_quality_factor_vs_frequency(inst, start_freq, stop_freq, 
+                                              num_points, sweep_type="LOG", 
+                                              mode="CPQ")
+
+Inputs:
+  - inst: VISA instrument instance (required)
+  - start_freq: Start frequency (Hz, required)
+  - stop_freq: Stop frequency (Hz, required)
+  - num_points: Number of sweep points (integer, required)
+  - sweep_type: "LIN" or "LOG" (optional, default "LOG")
+  - mode: "CPQ" for capacitor Q or "LPQ" for inductor Q (optional, default "CPQ")
+
+Outputs:
+  - freq_array: Array of frequencies (Hz)
+  - primary_vals: Array of C or L values (F or H)
+  - q_vals: Array of quality factor values (dimensionless)
+
+
+1.3.11 R-X vs. Frequency (Resistance-Reactance)
+-------------------------------------------------------------------------------
+Function: measure_rx_vs_frequency(inst, start_freq, stop_freq, num_points, 
+                                   sweep_type="LOG")
+
+Inputs:
+  - inst: VISA instrument instance (required)
+  - start_freq: Start frequency (Hz, required)
+  - stop_freq: Stop frequency (Hz, required)
+  - num_points: Number of sweep points (integer, required)
+  - sweep_type: "LIN" or "LOG" (optional, default "LOG")
+
+Outputs:
+  - freq_array: Array of frequencies (Hz)
+  - r_vals: Array of resistance values (Ω)
+  - x_vals: Array of reactance values (Ω)
+
+
+1.3.12 G-B vs. Frequency (Conductance-Susceptance)
+-------------------------------------------------------------------------------
+Function: measure_gb_vs_frequency(inst, start_freq, stop_freq, num_points, 
+                                   sweep_type="LOG")
+
+Inputs:
+  - inst: VISA instrument instance (required)
+  - start_freq: Start frequency (Hz, required)
+  - stop_freq: Stop frequency (Hz, required)
+  - num_points: Number of sweep points (integer, required)
+  - sweep_type: "LIN" or "LOG" (optional, default "LOG")
+
+Outputs:
+  - freq_array: Array of frequencies (Hz)
+  - g_vals: Array of conductance values (S)
+  - b_vals: Array of susceptance values (S)
+
+
+--------------------------------------------------------------------------------
+1.4 UTILITY FUNCTIONS
+--------------------------------------------------------------------------------
+
+1.4.1 Compute Relative Permittivity (Dielectric Constant)
+-------------------------------------------------------------------------------
+Function: compute_eps_r(capacitance, thickness_nm, diameter_um)
+
+Inputs:
+  - capacitance: Capacitance value (F, required)
+  - thickness_nm: Dielectric thickness (nm, required)
+  - diameter_um: Electrode diameter (µm, required)
+
+Outputs:
+  - eps_r: Relative permittivity (dimensionless)
+
+Formula: εr = C * t / (ε0 * A)
+  where ε0 = 8.854e-12 F/m, A = π(d/2)²
+
+
+1.4.2 Compute Impedance Components
+-------------------------------------------------------------------------------
+Function: compute_impedance_components(z_mag, theta_deg)
+
+Inputs:
+  - z_mag: Impedance magnitude (Ω, required)
+  - theta_deg: Phase angle (degrees, required)
+
+Outputs:
+  - z_real: Real impedance component (Ω)
+  - z_imag: Imaginary impedance component (Ω)
+
+
+1.4.3 Fixture Corrections
+-------------------------------------------------------------------------------
+Functions:
+  - perform_open_correction(inst)
+  - perform_short_correction(inst)
+  - perform_load_correction(inst, ref_r, ref_x=0.0)
+  - disable_corrections(inst)
+
+Open Correction:
+  Inputs: inst (required)
+  Description: Measures and compensates for stray admittance with open fixture
+
+Short Correction:
+  Inputs: inst (required)
+  Description: Measures and compensates for fixture impedance with shorted probes
+
+Load Correction:
+  Inputs:
+    - inst (required)
+    - ref_r: Reference resistance (Ω, required)
+    - ref_x: Reference reactance (Ω, optional, default 0.0)
+  Description: Calibrates using a known reference impedance
+
+
+================================================================================
+2. TOOL 2: PIA (4294A) - PRECISION IMPEDANCE ANALYZER
+================================================================================
+Instrument: Agilent 4294A Precision Impedance Analyzer
+GPIB Address Default: "GPIB0::24::INSTR"
+Module: measurement functions/pia.py
+
+
+--------------------------------------------------------------------------------
+2.1 MEASUREMENT MODES
+--------------------------------------------------------------------------------
+The 4294A supports multiple measurement functions:
+- CPD: Cp-D (parallel capacitance - dissipation factor)
+- ZTD: Z-θ (impedance magnitude - phase in degrees)
+- RX: R-X (resistance - reactance)
+- GB: G-B (conductance - susceptance)
+- YTD: Y-θ (admittance magnitude - phase)
+
+
+--------------------------------------------------------------------------------
+2.2 GLOBAL PARAMETERS
+--------------------------------------------------------------------------------
+
+Parameter: Frequency Start
+  - Range: > 0 Hz (for LOG sweep)
+  - Default: 40 Hz
+  - Unit: Hz
+  - Variable: FREQ_START_HZ
+
+Parameter: Frequency Stop
+  - Range: Up to 110 MHz (4294A capability)
+  - Default: 5,000,000 Hz (5 MHz)
+  - Unit: Hz
+  - Variable: FREQ_STOP_HZ
+
+Parameter: Number of Points
+  - Default: 201
+  - Variable: NUM_POINTS
+
+Parameter: DC Bias
+  - Range: -40 V to +40 V
+  - Default Enable: True
+  - Default Voltage: 0 V
+  - Unit: V (DC)
+  - Variable: APPLY_DC_BIAS, DC_BIAS_V
+
+Parameter: Oscillator Voltage Level
+  - Default: 0.5 V (RMS)
+  - Unit: V (AC, RMS)
+  - Set via: "POWE 0.5" command
+
+Parameter: DC Bias Current Range
+  - Default: "M10" (10 mA range)
+  - Options: M10, etc.
+
+
+--------------------------------------------------------------------------------
+2.3 MEASUREMENTS
+--------------------------------------------------------------------------------
+
+2.3.1 Cp-D vs. Frequency (Capacitance-Dissipation)
+-------------------------------------------------------------------------------
+Function: measure_cpd_vs_freq(inst, freq_start=None, freq_stop=None, 
+                               num_points=None)
+
+Inputs:
+  - inst: VISA instrument instance (required)
+  - freq_start: Start frequency (Hz, optional, default 40 Hz)
+  - freq_stop: Stop frequency (Hz, optional, default 5 MHz)
+  - num_points: Number of sweep points (optional, default 201)
+
+Outputs:
+  - freq_axis: Array of frequencies (Hz) - LOG spaced
+  - cp_vals: Array of parallel capacitance values (F)
+  - d_vals: Array of dissipation factor values (dimensionless)
+
+Notes:
+  - Sweep is always LOG (logarithmic)
+  - Uses current DC bias setting
+
+
+2.3.2 Impedance vs. Frequency (Z-θ)
+-------------------------------------------------------------------------------
+Function: measure_impedance_vs_freq(inst, freq_start=None, freq_stop=None, 
+                                    num_points=None)
+
+Inputs:
+  - inst: VISA instrument instance (required)
+  - freq_start: Start frequency (Hz, optional, default 40 Hz)
+  - freq_stop: Stop frequency (Hz, optional, default 5 MHz)
+  - num_points: Number of sweep points (optional, default 201)
+
+Outputs:
+  - freq_axis: Array of frequencies (Hz) - LOG spaced
+  - z_mag: Array of impedance magnitudes (Ω)
+  - theta_deg: Array of phase angles (degrees)
+
+
+2.3.3 R-X vs. Frequency (Resistance-Reactance)
+-------------------------------------------------------------------------------
+Function: measure_rx_vs_freq(inst, freq_start=None, freq_stop=None, 
+                              num_points=None)
+
+Inputs:
+  - inst: VISA instrument instance (required)
+  - freq_start: Start frequency (Hz, optional, default 40 Hz)
+  - freq_stop: Stop frequency (Hz, optional, default 5 MHz)
+  - num_points: Number of sweep points (optional, default 201)
+
+Outputs:
+  - freq_axis: Array of frequencies (Hz) - LOG spaced
+  - r_vals: Array of resistance values (Ω)
+  - x_vals: Array of reactance values (Ω)
+
+
+2.3.4 G-B vs. Frequency (Conductance-Susceptance)
+-------------------------------------------------------------------------------
+Function: measure_gb_vs_freq(inst, freq_start=None, freq_stop=None, 
+                              num_points=None)
+
+Inputs:
+  - inst: VISA instrument instance (required)
+  - freq_start: Start frequency (Hz, optional, default 40 Hz)
+  - freq_stop: Stop frequency (Hz, optional, default 5 MHz)
+  - num_points: Number of sweep points (optional, default 201)
+
+Outputs:
+  - freq_axis: Array of frequencies (Hz) - LOG spaced
+  - g_vals: Array of conductance values (S)
+  - b_vals: Array of susceptance values (S)
+
+
+2.3.5 Y-θ vs. Frequency (Admittance-Phase)
+-------------------------------------------------------------------------------
+Function: measure_ytd_vs_freq(inst, freq_start=None, freq_stop=None, 
+                               num_points=None)
+
+Inputs:
+  - inst: VISA instrument instance (required)
+  - freq_start: Start frequency (Hz, optional, default 40 Hz)
+  - freq_stop: Stop frequency (Hz, optional, default 5 MHz)
+  - num_points: Number of sweep points (optional, default 201)
+
+Outputs:
+  - freq_axis: Array of frequencies (Hz) - LOG spaced
+  - y_mag: Array of admittance magnitudes (S)
+  - y_theta_deg: Array of phase angles (degrees)
+
+
+2.3.6 C-V Sweep (Single Cycle - Butterfly)
+-------------------------------------------------------------------------------
+Function: measure_single_cv_cycle(inst, freq_hz, v_min, v_max, n_points)
+
+Inputs:
+  - inst: VISA instrument instance (required)
+  - freq_hz: Measurement frequency (Hz, required)
+  - v_min: Minimum DC bias voltage (V, required)
+  - v_max: Maximum DC bias voltage (V, required)
+  - n_points: Number of voltage points per direction (integer, required)
+
+Outputs:
+  - v_full: Array of DC bias voltages (V)
+    Contains: v_min → v_max (UP) and v_max → v_min (DOWN)
+  - cp_full: Array of parallel capacitance values (F)
+
+Notes:
+  - Performs bidirectional sweep automatically (butterfly loop)
+  - Sweep order preserved in output arrays
+
+
+2.3.7 εr vs. Frequency (Dielectric Constant)
+-------------------------------------------------------------------------------
+Function: measure_eps_vs_freq(inst, freq_start, freq_stop, freq_points, 
+                               bias_voltage=0.0)
+
+Inputs:
+  - inst: VISA instrument instance (required)
+  - freq_start: Start frequency (Hz, required)
+  - freq_stop: Stop frequency (Hz, required)
+  - freq_points: Number of frequency points (integer, required)
+  - bias_voltage: DC bias voltage (V, optional, default 0.0)
+
+Outputs:
+  - freq_axis: Array of frequencies (Hz)
+  - cp_freq: Array of parallel capacitance values (F)
+
+Notes:
+  - Fixed DC bias throughout measurement
+  - Use compute_eps_r() to convert Cp to εr
+
+
+--------------------------------------------------------------------------------
+2.4 UTILITY FUNCTIONS
+--------------------------------------------------------------------------------
+
+2.4.1 Compute Relative Permittivity (Dielectric Constant)
+-------------------------------------------------------------------------------
+Function: compute_eps_r(cp_array, thickness_nm, diameter_um)
+
+Inputs:
+  - cp_array: Capacitance value(s) (F, required) - can be array or scalar
+  - thickness_nm: Dielectric thickness (nm, required)
+  - diameter_um: Electrode diameter (µm, required)
+
+Outputs:
+  - eps_r: Relative permittivity (dimensionless)
+
+Formula: εr = Cp * t / (ε0 * A)
+  where ε0 = 8.854e-12 F/m, A = π(d/2)²
+
+
+2.4.2 Configuration Functions
+-------------------------------------------------------------------------------
+Functions:
+  - configure_dc_bias(inst, apply_bias, dc_bias_v)
+  - set_frequency_sweep(inst, f_start, f_stop, n_points)
+  - set_frequency(inst, freq_hz)
+
+DC Bias Configuration:
+  Inputs:
+    - inst (required)
+    - apply_bias: Boolean (required)
+    - dc_bias_v: DC voltage (V, required if apply_bias is True)
+  Range: -40 V to +40 V
+
+Frequency Sweep Configuration:
+  Inputs:
+    - inst (required)
+    - f_start: Start frequency (Hz, required)
+    - f_stop: Stop frequency (Hz, required)
+    - n_points: Number of points (integer, required)
+  Type: LOG sweep
+
+Set Single Frequency:
+  Inputs:
+    - inst (required)
+    - freq_hz: Frequency (Hz, required)
+
+
+================================================================================
+3. TOOL 3: PSPA (4155C/4156C) - PARAMETER/SEMICONDUCTOR ANALYZER
+================================================================================
+Instrument: Agilent 4155C/4156C Semiconductor Parameter Analyzer
+GPIB Address Default: "GPIB0::16::INSTR"
+Module: measurement functions/pspa.py
+
+
+--------------------------------------------------------------------------------
+3.1 SYSTEM PARAMETERS
+--------------------------------------------------------------------------------
+
+Parameter: Channels
+  - Available: 1-4 (SMU channels)
+  - Configuration: Independent per channel
+  - Modes: Voltage Source or Current Source
+
+Parameter: Compliance
+  - Description: Maximum current (for voltage source) or voltage (for current source)
+  - Default: 0.1 A (voltage mode) or 2.0 V (current mode)
+  - Unit: A or V (depends on source mode)
+
+Parameter: Range
+  - Default: 0 (auto-range)
+  - Description: Measurement/source range selection
+
+Parameter: Typical Channel Assignments (Default)
+  - Drain Channel: 1
+  - Gate Channel: 2
+  - Source Channel: 3
+  - Channel 4: Available for additional terminal
+
+
+--------------------------------------------------------------------------------
+3.2 MEASUREMENTS - TRANSISTOR CHARACTERIZATION
+--------------------------------------------------------------------------------
+
+3.2.1 Output Characteristics (Id-Vds Family)
+-------------------------------------------------------------------------------
+Function: measure_transistor_output_characteristics(
+    pspa, vds_start, vds_stop, vds_step,
+    vgs_start, vgs_stop, vgs_step,
+    drain_ch=1, gate_ch=2, source_ch=3, compliance=0.1)
+
+Inputs:
+  - pspa: VISA instrument instance (required)
+  - vds_start: Start drain-source voltage (V, required)
+  - vds_stop: Stop drain-source voltage (V, required)
+  - vds_step: Drain-source voltage step (V, required, non-zero)
+  - vgs_start: Start gate-source voltage (V, required)
+  - vgs_stop: Stop gate-source voltage (V, required)
+  - vgs_step: Gate-source voltage step (V, required, non-zero)
+  - drain_ch: Drain SMU channel (integer, optional, default 1)
+  - gate_ch: Gate SMU channel (integer, optional, default 2)
+  - source_ch: Source SMU channel (integer, optional, default 3)
+  - compliance: Current compliance limit (A, optional, default 0.1)
+
+Outputs (dict):
+  - 'Vds': Array of drain-source voltages (V)
+  - 'Vgs': Array of gate-source voltages (V)
+  - 'Id': Array of drain currents (A)
+
+Description:
+  - Nested sweep: Vgs outer loop, Vds inner loop
+  - Generates family of Id-Vds curves at different Vgs values
+  - Source is grounded (0 V)
+
+
+3.2.2 Transfer Characteristics (Id-Vgs)
+-------------------------------------------------------------------------------
+Function: measure_transistor_transfer_characteristics(
+    pspa, vgs_start, vgs_stop, vgs_step, vds_constant,
+    drain_ch=1, gate_ch=2, source_ch=3, compliance=0.1)
+
+Inputs:
+  - pspa: VISA instrument instance (required)
+  - vgs_start: Start gate-source voltage (V, required)
+  - vgs_stop: Stop gate-source voltage (V, required)
+  - vgs_step: Gate-source voltage step (V, required, non-zero)
+  - vds_constant: Fixed drain-source voltage (V, required)
+  - drain_ch: Drain SMU channel (integer, optional, default 1)
+  - gate_ch: Gate SMU channel (integer, optional, default 2)
+  - source_ch: Source SMU channel (integer, optional, default 3)
+  - compliance: Current compliance limit (A, optional, default 0.1)
+
+Outputs (dict):
+  - 'Vgs': Array of gate-source voltages (V)
+  - 'Id': Array of drain currents (A)
+  - 'Ig': Array of gate currents (A)
+
+Description:
+  - Sweeps Vgs while holding Vds constant
+  - Measures both drain and gate currents
+  - Used to extract threshold voltage, transconductance
+
+
+--------------------------------------------------------------------------------
+3.3 MEASUREMENTS - GENERAL I-V CHARACTERIZATION
+--------------------------------------------------------------------------------
+
+3.3.1 Simple I-V Curve (Single Direction)
+-------------------------------------------------------------------------------
+Function: measure_iv_curve(pspa, v_start, v_stop, v_step, 
+                           channel=1, compliance=0.1)
+
+Inputs:
+  - pspa: VISA instrument instance (required)
+  - v_start: Start voltage (V, required)
+  - v_stop: Stop voltage (V, required)
+  - v_step: Voltage step (V, required, non-zero)
+  - channel: SMU channel (integer, optional, default 1)
+  - compliance: Current compliance limit (A, optional, default 0.1)
+
+Outputs (dict):
+  - 'Voltage': Array of voltages (V)
+  - 'Current': Array of currents (A)
+
+Description:
+  - Single direction voltage sweep
+  - Force voltage, measure current
+
+
+3.3.2 Bidirectional I-V (Hysteresis)
+-------------------------------------------------------------------------------
+Function: measure_iv_bidirectional(pspa, v_max, v_step, 
+                                   channel=1, compliance=0.1)
+
+Inputs:
+  - pspa: VISA instrument instance (required)
+  - v_max: Maximum voltage magnitude (V, required)
+  - v_step: Voltage step (V, required, non-zero)
+  - channel: SMU channel (integer, optional, default 1)
+  - compliance: Current compliance limit (A, optional, default 0.1)
+
+Outputs (dict):
+  - 'Voltage': Array of voltages (V)
+  - 'Current': Array of currents (A)
+
+Description:
+  - Three-segment sweep: 0 → +v_max → -v_max → 0
+  - Used to detect hysteresis effects
+  - Force voltage, measure current
+
+
+3.3.3 Diode I-V Characteristics
+-------------------------------------------------------------------------------
+Function: measure_diode_iv(pspa, v_start, v_stop, v_step, 
+                           anode_ch=1, cathode_ch=2, compliance=0.1)
+
+Inputs:
+  - pspa: VISA instrument instance (required)
+  - v_start: Start voltage (V, required)
+  - v_stop: Stop voltage (V, required)
+  - v_step: Voltage step (V, required, non-zero)
+  - anode_ch: Anode SMU channel (integer, optional, default 1)
+  - cathode_ch: Cathode SMU channel (integer, optional, default 2)
+  - compliance: Current compliance limit (A, optional, default 0.1)
+
+Outputs (dict):
+  - 'Voltage': Array of anode voltages (V)
+  - 'Current': Array of anode currents (A)
+
+Description:
+  - Cathode grounded at 0 V
+  - Sweeps anode voltage
+  - Measures anode current
+
+
+3.3.4 Gate Leakage Measurement
+-------------------------------------------------------------------------------
+Function: measure_gate_leakage(pspa, vgs_start, vgs_stop, vgs_step,
+                               gate_ch=2, source_ch=3, compliance=1e-3)
+
+Inputs:
+  - pspa: VISA instrument instance (required)
+  - vgs_start: Start gate-source voltage (V, required)
+  - vgs_stop: Stop gate-source voltage (V, required)
+  - vgs_step: Gate-source voltage step (V, required, non-zero)
+  - gate_ch: Gate SMU channel (integer, optional, default 2)
+  - source_ch: Source SMU channel (integer, optional, default 3)
+  - compliance: Current compliance limit (A, optional, default 1e-3 = 1 mA)
+
+Outputs (dict):
+  - 'Vgs': Array of gate-source voltages (V)
+  - 'Ig': Array of gate leakage currents (A)
+
+Description:
+  - Source grounded at 0 V
+  - Sweeps gate voltage
+  - Measures gate current (leakage)
+
+
+3.3.5 Breakdown Voltage Measurement
+-------------------------------------------------------------------------------
+Function: measure_breakdown_voltage(pspa, v_start, v_stop, v_step, 
+                                    channel=1, compliance=1e-3, 
+                                    threshold_a=1e-4)
+
+Inputs:
+  - pspa: VISA instrument instance (required)
+  - v_start: Start voltage (V, required)
+  - v_stop: Stop voltage (V, required)
+  - v_step: Voltage step (V, required, non-zero)
+  - channel: SMU channel (integer, optional, default 1)
+  - compliance: Current compliance limit (A, optional, default 1e-3 = 1 mA)
+  - threshold_a: Breakdown current threshold (A, optional, default 1e-4 = 100 µA)
+
+Outputs (dict):
+  - 'Voltage': Array of voltages (V)
+  - 'Current': Array of currents (A)
+  - 'breakdown_v': Breakdown voltage (V) or None if not reached
+
+Description:
+  - Sweeps voltage upward until current exceeds threshold
+  - Automatically stops at breakdown to protect DUT
+  - Used for dielectric breakdown testing
+
+
+3.3.6 Resistance Measurement (4-Wire)
+-------------------------------------------------------------------------------
+Function: measure_resistance(pspa, i_start, i_stop, i_step, 
+                             channel=1, compliance=10.0)
+
+Inputs:
+  - pspa: VISA instrument instance (required)
+  - i_start: Start current (A, required)
+  - i_stop: Stop current (A, required)
+  - i_step: Current step (A, required, non-zero)
+  - channel: SMU channel (integer, optional, default 1)
+  - compliance: Voltage compliance limit (V, optional, default 10.0)
+
+Outputs (dict):
+  - 'Current': Array of forced currents (A)
+  - 'Voltage': Array of measured voltages (V)
+  - 'resistance_ohm': Calculated resistance (Ω, from linear fit)
+
+Description:
+  - Force current, measure voltage
+  - Computes resistance from linear fit: R = ΔV / ΔI
+  - More accurate for low-resistance measurements
+
+
+--------------------------------------------------------------------------------
+3.4 MEASUREMENTS - PULSED CHARACTERIZATION
+--------------------------------------------------------------------------------
+
+3.4.1 Pulsed I-V Measurement (Single Channel)
+-------------------------------------------------------------------------------
+Function: measure_pulsed_iv(pspa, v_base, v_pulse, pulse_width, pulse_period, 
+                            num_pulses, channel=1, compliance=0.1)
+
+Inputs:
+  - pspa: VISA instrument instance (required)
+  - v_base: Base voltage level (V, required)
+  - v_pulse: Pulse voltage level (V, required)
+  - pulse_width: Pulse width (s, required, must be > 0)
+  - pulse_period: Pulse period (s, required, must be > pulse_width)
+  - num_pulses: Number of pulses to measure (integer, required, > 0)
+  - channel: SMU channel (integer, optional, default 1)
+  - compliance: Current compliance limit (A, optional, default 0.1)
+
+Outputs (dict):
+  - 'Time': Array of measurement times (s)
+  - 'Voltage': Array of pulse voltages (V) - constant at v_pulse
+  - 'Current': Array of measured currents at pulse peak (A)
+
+Description:
+  - Uses FLEX Mode MM 3 (1-channel pulsed spot measurement)
+  - Measures current at pulse peak
+  - Reduces self-heating effects
+  - Time array = pulse_period * pulse_index
+
+
+3.4.2 Pulsed Transistor Measurement
+-------------------------------------------------------------------------------
+Function: measure_pulsed_transistor(pspa, vds_pulse, vgs_pulse, vds_base, 
+                                    vgs_base, pulse_width, pulse_period, 
+                                    num_pulses, drain_ch=1, gate_ch=2, 
+                                    source_ch=3, compliance=0.1)
+
+Inputs:
+  - pspa: VISA instrument instance (required)
+  - vds_pulse: Drain-source pulse voltage (V, required)
+  - vgs_pulse: Gate-source voltage level (V, required)
+  - vds_base: Drain-source base voltage (V, required)
+  - vgs_base: Gate-source base voltage (V, not used in current implementation)
+  - pulse_width: Pulse width (s, required, must be > 0)
+  - pulse_period: Pulse period (s, required, must be > pulse_width)
+  - num_pulses: Number of pulses (integer, required, > 0)
+  - drain_ch: Drain SMU channel (integer, optional, default 1)
+  - gate_ch: Gate SMU channel (integer, optional, default 2)
+  - source_ch: Source SMU channel (integer, optional, default 3)
+  - compliance: Current compliance limit (A, optional, default 0.1)
+
+Outputs (dict):
+  - 'Time': Array of measurement times (s)
+  - 'Id': Array of drain currents at pulse peak (A)
+
+Description:
+  - LIMITATION: Current implementation pulses Vds only
+  - Gate held at constant DC level (vgs_pulse)
+  - vgs_base parameter not used (requires complex staircase sweep setup)
+  - Source grounded at 0 V
+  - Reduces self-heating in high-power transistor measurements
+
+
+--------------------------------------------------------------------------------
+3.5 UTILITY AND CONFIGURATION FUNCTIONS
+--------------------------------------------------------------------------------
+
+3.5.1 Channel Configuration
+-------------------------------------------------------------------------------
+Function: configure_smu(pspa, channel, mode='VOLT', compliance=0.1)
+
+Inputs:
+  - pspa: VISA instrument instance (required)
+  - channel: SMU channel number (1-4, required)
+  - mode: 'VOLT' or 'CURR' (optional, default 'VOLT')
+  - compliance: Compliance limit (optional, default 0.1)
+    * For VOLT mode: current compliance in A
+    * For CURR mode: voltage compliance in V
+
+Description:
+  - Configures SMU channel as voltage or current source
+  - Enables the channel
+  - Updates global SMU_CONFIG state
+
+
+3.5.2 Source Functions
+-------------------------------------------------------------------------------
+Functions:
+  - set_voltage(pspa, channel, voltage)
+  - set_current(pspa, channel, current)
+  - output_on(pspa, channel)
+  - output_off(pspa, channel)
+
+Set Voltage:
+  Inputs:
+    - pspa (required)
+    - channel: SMU channel (1-4, required)
+    - voltage: Voltage value (V, required)
+  Description: Force DC voltage using FLEX 'DV' command
+
+Set Current:
+  Inputs:
+    - pspa (required)
+    - channel: SMU channel (1-4, required)
+    - current: Current value (A, required)
+  Description: Force DC current using FLEX 'DI' command
+
+Output Control:
+  Inputs:
+    - pspa (required)
+    - channel: SMU channel (1-4, required)
+  Description: Enable or disable channel output
+
+
+3.5.3 Measurement Functions
+-------------------------------------------------------------------------------
+Function: measure_channel_current(pspa, channel)
+
+Inputs:
+  - pspa: VISA instrument instance (required)
+  - channel: SMU channel (1-4, required)
+
+Outputs:
+  - current: Measured current (A)
+
+Description:
+  - High-speed spot measurement using FLEX 'TI?' command
+  - Auto-range (range 0)
+
+
+3.5.4 Validation Functions
+-------------------------------------------------------------------------------
+Functions:
+  - validate_channel(channel): Ensures 1 ≤ channel ≤ 4
+  - validate_compliance(compliance): Ensures compliance > 0
+  - validate_step(step): Ensures step ≠ 0
+
+
+3.5.5 Sweep Generation
+-------------------------------------------------------------------------------
+Function: sweep_values(start, stop, step)
+
+Inputs:
+  - start: Start value (float, required)
+  - stop: Stop value (float, required)
+  - step: Step value (float, required, non-zero)
+
+Outputs:
+  - Array of sweep values (numpy array)
+
+Description:
+  - Generates linearly spaced values from start to stop
+  - Sign of step determines direction
+  - Last point hard-clipped to exactly stop value
+
+
+================================================================================
+4. CONFIGURATION DEFAULTS (config.yaml)
+================================================================================
+
+--------------------------------------------------------------------------------
+4.1 CRYO (CRYOCON 32B) DEFAULTS
+--------------------------------------------------------------------------------
+gpib_address:  "GPIB0::24::INSTR"      # Cryocon 32B GPIB address (placeholder)
+temp_start_k:  100.0                   # Default start temperature (K)
+temp_end_k:    200.0                   # Default end temperature (K)
+ramp_rate_k_per_min: 5.0               # Default ramp rate (K/min)
+meas_interval_k: 10.0                  # Default measurement interval (K)
+
+Notes:
+  - Temperature range: 1.4 K to 325 K
+  - Ramp rate range: 0.1 K/min to 50 K/min (system dependent)
+  - Measurement interval: ≥1.0 K recommended
+  - Control loop: 1 (uses CH1 sensor)
+
+
+--------------------------------------------------------------------------------
+4.2 GPIB ADDRESSES
+--------------------------------------------------------------------------------
+pia:  "GPIB0::24::INSTR"      # Agilent 4294A
+pspa: "GPIB0::16::INSTR"      # Agilent 4155C/4156C
+lcr:  "GPIB0::_____::INSTR"   # Agilent E4980A (to be configured)
+cryo: "GPIB0::___::INSTR"      # Cryocon 32B (to be configured)
+
+
+--------------------------------------------------------------------------------
+4.3 PIA (4294A) DEFAULTS
+--------------------------------------------------------------------------------
+freq_start_hz: 40             # Start frequency (Hz)
+freq_stop_hz:  5.0e6          # Stop frequency (Hz) = 5 MHz
+num_points:    201            # Number of sweep points
+apply_dc_bias: true           # Enable DC bias
+dc_bias_v:     0              # DC bias voltage (V)
+osc_voltage_v: 0.5            # AC oscillator level (V RMS)
+dc_range:      "M10"          # DC bias current range (10 mA)
+
+
+--------------------------------------------------------------------------------
+4.4 PSPA (4155C/4156C) DEFAULTS
+--------------------------------------------------------------------------------
+compliance_a:  0.1            # Default current compliance (A)
+drain_ch:      1              # Default drain channel
+gate_ch:       2              # Default gate channel
+source_ch:     3              # Default source channel
+
+
+--------------------------------------------------------------------------------
+4.5 LCR (E4980A) DEFAULTS
+--------------------------------------------------------------------------------
+freq_default_hz: 1000         # Default frequency (Hz) = 1 kHz
+ac_level_v:      1.0          # AC signal level (V RMS)
+apply_dc_bias:   false        # DC bias disabled by default
+dc_bias_v:       0.0          # DC bias voltage (V)
+sweep_points:    201          # Number of sweep points
+meas_time:       "MED"        # Integration time (SHOR/MED/LONG/LONG2)
+
+
+--------------------------------------------------------------------------------
+4.6 OUTPUT CONFIGURATION
+--------------------------------------------------------------------------------
+directory: ""                 # Output directory (empty = default ../output)
+
+
+--------------------------------------------------------------------------------
+4.7 LOGGING CONFIGURATION
+--------------------------------------------------------------------------------
+level:         "INFO"         # Log level (DEBUG/INFO/WARNING/ERROR)
+log_to_file:   true           # Enable file logging
+log_filename:  "measurement.log"  # Log file name
+
+
+================================================================================
+5. CODE ARCHITECTURE
+================================================================================
+
+--------------------------------------------------------------------------------
+5.1 PROJECT STRUCTURE
+--------------------------------------------------------------------------------
+
+  Semiconductor-Measurement-Automation/
+  ├── main.py                         # CLI orchestration, measurement menus
+  ├── config.yaml                     # User-editable defaults (GPIB, params)
+  ├── TOOLS_AND_MEASUREMENTS_REFERENCE.txt
+  ├── README.md
+  ├── measurement functions/
+  │   ├── __init__.py
+  │   ├── pia.py                      # 4294A Precision Impedance Analyzer
+  │   ├── pspa.py                     # 4155C/4156C Parameter Analyzer (FLEX)
+  │   ├── lcr.py                      # E4980A LCR Meter
+  │   └── cryo.py                     # Cryocon 32B Temperature Controller
+  ├── utility/
+  │   ├── __init__.py
+  │   ├── gpib_utils.py               # InstrumentSession, input helpers, retry
+  │   ├── file_management.py          # CSV/image saving, output directory mgmt
+  │   ├── config.py                   # YAML config loader
+  │   ├── logging_config.py           # Centralized logging setup
+  │   ├── find_instruments.py         # Standalone VISA resource discovery
+  │   ├── test_4156c_commands.py      # PSPA command testing script
+  │   └── test_pspa_commands.py       # PSPA integration test script
+  └── LEGACY/                         # Old standalone scripts (not used)
+
+
+--------------------------------------------------------------------------------
+5.2 KEY DESIGN PATTERNS
+--------------------------------------------------------------------------------
+
+Instrument Lifecycle (InstrumentSession):
+  - All instrument connections use InstrumentSession context manager
+  - Guarantees cleanup (disconnect) even on exceptions
+  - Pattern: with InstrumentSession(module.connect, module.disconnect) as inst:
+
+User Input (safe_float_input / safe_int_input):
+  - Defined in gpib_utils.py, imported everywhere
+  - Loops until valid input; pressing Enter returns the default
+  - Prevents crashes from empty or non-numeric input
+
+Parameter Persistence:
+  - Each module (pia, lcr, cryo) has a current_parameters dict
+  - Stores last-used settings for quick re-use across measurements
+  - prompt_for_parameter_duplication() offers "use last params?" shortcut
+
+Measurement Flow:
+  1. User selects instrument → measurement from CLI menu
+  2. Parameters are prompted (with defaults)
+  3. InstrumentSession opens connection
+  4. Module-level function performs sweep/measurement
+  5. Data saved to CSV via file_management.save_csv()
+  6. Plot saved to images/ via file_management.save_plot() or save_image()
+  7. InstrumentSession auto-disconnects on exit
+
+Error Handling:
+  - Each measurement choice wrapped in try/except
+  - Errors logged via Python logging + printed to console
+  - InstrumentSession ensures cleanup even on failure
+
+
+--------------------------------------------------------------------------------
+5.3 MODULE RESPONSIBILITIES
+--------------------------------------------------------------------------------
+
+main.py:
+  - CLI menu system (instrument → measurement selection)
+  - Calls measurement module functions
+  - Handles plotting (matplotlib) and file saving
+  - Cryogenic temperature loop orchestration
+
+pia.py:
+  - 4294A connection and initialization
+  - _initialize_4294a() — generic init, called by mode-specific wrappers
+  - Frequency sweep and DC bias sweep configuration
+  - Cp-D, Z-θ, R-X, G-B, Y-θ measurements
+  - C-V butterfly cycle support
+  - εr (permittivity) computation from capacitance
+
+pspa.py:
+  - 4155C/4156C FLEX mode connection
+  - SMU configuration (voltage/current source modes)
+  - Transistor output/transfer characteristics
+  - I-V curves (unidirectional and bidirectional)
+  - Pulsed measurements (single device and transistor)
+  - Diode I-V, gate leakage, breakdown voltage, resistance
+
+lcr.py:
+  - E4980A connection and initialization
+  - Single-point and frequency sweep measurements
+  - C-V sweeps (single and butterfly)
+  - Open/short/load correction routines
+  - Impedance component calculations
+
+cryo.py:
+  - Cryocon 32B connection and initialization
+  - Temperature setpoint and ramp rate control
+  - Temperature monitoring and stability detection
+  - Temperature sweep point generation
+
+gpib_utils.py:
+  - InstrumentSession context manager
+  - safe_float_input(), safe_int_input() — validated user input
+  - prompt_choice(), prompt_bool() — CLI helpers
+  - gpib_retry() — decorator for flaky VISA calls
+
+file_management.py:
+  - save_csv() — CSV with auto-uniquified filename
+  - save_image() — semilog plot with optional DC bias annotation
+  - save_plot() — save pre-built matplotlib figure
+  - save_cycle_plot() — multi-cycle overlay plot
+  - uniquify() — append (1), (2), etc. to prevent overwrites
+
+
+================================================================================
+END OF REFERENCE DOCUMENT
+================================================================================

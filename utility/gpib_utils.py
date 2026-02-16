@@ -104,33 +104,54 @@ class InstrumentSession:
 # CLI prompt helpers
 # ============================================================
 
-def prompt_float(label: str, default: float) -> float:
-    """Prompt user for a float with a default value.
+def safe_float_input(prompt: str, default: float) -> float:
+    """Safely get float input from user with default value and retry on error.
+
+    Loops until valid input is received.  Pressing Enter returns *default*.
 
     Example::
 
-        freq = prompt_float("Enter frequency (Hz)", 1000)
+        freq = safe_float_input("Enter frequency (Hz) [default 1000]: ", 1000)
     """
-    raw = input(f"{label} [default {default}]: ").strip()
-    if not raw:
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        log.warning("Invalid float '%s', using default %s", raw, default)
-        return default
+    while True:
+        try:
+            raw = input(prompt).strip()
+            if not raw:
+                return float(default)
+            return float(raw)
+        except ValueError:
+            print("Invalid input. Please enter a number.")
 
 
-def prompt_int(label: str, default: int) -> int:
-    """Prompt user for an int with a default value."""
-    raw = input(f"{label} [default {default}]: ").strip()
+def safe_int_input(prompt: str, default: int) -> int:
+    """Safely get integer input from user with default value and retry on error.
+
+    Loops until valid input is received.  Pressing Enter returns *default*.
+    """
+    while True:
+        try:
+            raw = input(prompt).strip()
+            if not raw:
+                return int(default)
+            return int(raw)
+        except ValueError:
+            print("Invalid input. Please enter an integer.")
+
+
+def prompt_bool(label: str, default: bool = False) -> bool:
+    """Prompt user for a yes/no answer.
+
+    Returns *default* when the user presses Enter without typing.
+
+    Example::
+
+        apply = prompt_bool("Apply DC bias?", False)
+    """
+    hint = "Y/n" if default else "y/N"
+    raw = input(f"{label} ({hint}): ").strip().lower()
     if not raw:
         return default
-    try:
-        return int(raw)
-    except ValueError:
-        log.warning("Invalid int '%s', using default %s", raw, default)
-        return default
+    return raw.startswith("y")
 
 
 def prompt_choice(label: str, options: list[str], default: str) -> str:

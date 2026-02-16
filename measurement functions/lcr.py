@@ -9,6 +9,9 @@ Description: Contains all constants and functions for LCR measurements.
 import pyvisa
 import numpy as np
 import time
+import logging
+
+log = logging.getLogger(__name__)
 
 # =============================
 # User settings and constants
@@ -53,16 +56,6 @@ current_parameters = {
 # =============================
 # Connection and Initialization
 # =============================
-
-def list_visa_resources():
-    """List all available VISA resources."""
-    try:
-        rm = pyvisa.ResourceManager()
-        resources = rm.list_resources()
-        return list(resources)
-    except Exception as e:
-        print(f"Error listing VISA resources: {e}")
-        return []
 
 def connect_e4980a(resource_name=None):
     """

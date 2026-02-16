@@ -1,4 +1,4 @@
 """
 Measurement functions package.
-Contains LCR measurement modules.
+Contains modules for PIA, PSPA, LCR, and Cryogenic measurements.
 """

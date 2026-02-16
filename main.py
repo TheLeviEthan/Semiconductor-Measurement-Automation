@@ -13,26 +13,31 @@ import argparse
 import logging
 import numpy as np
 import matplotlib.pyplot as plt
-<<<<<<< HEAD
-=======
 
 # Add directories to path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'utility'))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'measurement functions'))
 
 # Import modules
->>>>>>> 1df40515fc51d674c57a930ca0d179473eed0b18
 import pia
 import pspa
 import lcr
+import cryo
 import file_management
 import config
 import logging_config
 from gpib_utils import (
-    InstrumentSession, prompt_float, prompt_int, prompt_choice, prompt_bool,
+    InstrumentSession, prompt_choice, prompt_bool,
+    safe_float_input, safe_int_input,
 )
 
 log = logging.getLogger(__name__)
+
+# =============================
+# Global Cryo Parameters
+# =============================
+cryo_enabled = False
+cryo_params = None  # Will hold temperature sweep parameters
 
 # =============================
 # User settings and constants
@@ -79,29 +84,6 @@ lcr_measurements = [
 ]
 
 
-def safe_float_input(prompt, default):
-    """Safely get float input from user with default value and error handling."""
-    while True:
-        try:
-            user_input = input(prompt).strip()
-            if not user_input:
-                return float(default)
-            return float(user_input)
-        except ValueError:
-            print(f"Invalid input. Please enter a number.")
-
-
-def safe_int_input(prompt, default):
-    """Safely get integer input from user with default value and error handling."""
-    while True:
-        try:
-            user_input = input(prompt).strip()
-            if not user_input:
-                return int(default)
-            return int(user_input)
-        except ValueError:
-            print(f"Invalid input. Please enter an integer.")
-
 
 def parse_args():
     """Parse CLI arguments for the measurement automation script."""
@@ -114,9 +96,105 @@ def parse_args():
     )
     return parser.parse_args()
 
-def main():
-    # TODO: add save path in CLI, first prompt should select tool
 
+def run_cryo_measurement(tool_name, measurement_choice, measurement_function, *args, **kwargs):
+    """
+    Execute a measurement with cryogenic temperature control.
+    
+    Args:
+        tool_name: Name of the tool (e.g., "PIA", "PSPA", "LCR")
+        measurement_choice: User's measurement selection
+        measurement_function: Function to call for each temperature
+        *args, **kwargs: Arguments to pass to measurement_function
+    
+    This function:
+    1. Connects to the Cryocon 32B
+    2. Loops through temperature points
+    3. At each temperature, runs the measurement
+    4. Saves data with temperature annotation
+    """
+    global cryo_params
+    
+    if not cryo_enabled or cryo_params is None:
+        # Just run normal measurement (no cryo)
+        return measurement_function(*args, **kwargs)
+    
+    print(f"\n{'='*60}")
+    print(f"RUNNING {tool_name} MEASUREMENT WITH CRYOGENIC CONTROL")
+    print(f"{'='*60}")
+    
+    try:
+        # Connect to Cryocon
+        cryocon = cryo.setup()
+        temp_points = cryo_params['temp_points']
+        n_temps = len(temp_points)
+        
+        print(f"Temperature sweep: {temp_points[0]:.1f}K → {temp_points[-1]:.1f}K")
+        print(f"Number of temperature points: {n_temps}")
+        print(f"Ramp rate: {cryo_params['ramp_rate_k_per_min']:.2f}K/min\n")
+        
+        # Initialize lists to store all data
+        all_data = {
+            'temperature_k': [],
+            'data': []
+        }
+        
+        # Loop through temperature points
+        for temp_idx, target_temp in enumerate(temp_points):
+            print(f"\nTemperature point {temp_idx + 1}/{n_temps}: {target_temp:.2f}K")
+            
+            # Set temperature
+            cryo.set_temperature_setpoint(cryocon, target_temp, loop=1)
+            cryo.set_ramp_rate(cryocon, cryo_params['ramp_rate_k_per_min'], loop=1)
+            
+            # Wait for temperature to stabilize
+            success = cryo.wait_for_temperature(cryocon, target_temp, 
+                                               tolerance_k=cryo.TEMP_TOLERANCE_K,
+                                               stability_time_s=cryo.TEMP_STABILITY_TIME_S,
+                                               loop=1)
+            
+            if not success:
+                log.warning(f"Temperature control failed at point {temp_idx + 1}")
+                print(f"Warning: Temperature stabilization failed at {target_temp:.2f}K. Continuing anyway...")
+            
+            # Verify current temperature
+            current_temp = cryo.get_current_temperature(cryocon, loop=1)
+            print(f"Confirmed temperature: {current_temp:.2f}K")
+            
+            # Run measurement at this temperature
+            print(f"Executing {tool_name} measurement...")
+            meas_data = measurement_function(*args, **kwargs)
+            
+            # Store data with temperature
+            all_data['temperature_k'].append(current_temp)
+            all_data['data'].append(meas_data)
+            
+            print(f"Measurement complete at {current_temp:.2f}K")
+        
+        # Safely disconnect from Cryocon
+        cryo.disable_ramp(cryocon, loop=1)
+        cryo.disconnect_cryocon(cryocon)
+        
+        log.info(f"Cryogenic {tool_name} measurements complete")
+        print(f"\nAll cryogenic {tool_name} measurements complete!")
+        
+        return all_data
+        
+    except Exception as e:
+        log.error(f"Cryogenic measurement error: {e}")
+        print(f"Error during cryogenic measurement: {e}")
+        try:
+            cryo.disable_ramp(cryocon, loop=1)
+            cryo.disconnect_cryocon(cryocon)
+        except:
+            pass
+        raise
+
+
+def main():
+    """Main entry point for the measurement automation system."""
+    global cryo_enabled, cryo_params
+    
     args = parse_args()
 
     # --- Logging ----------------------------------------------------------
@@ -138,17 +216,47 @@ def main():
         print("="*60)
         print("SELECT INSTRUMENT")
         print("="*60)
+        print("0. CRYO - Cryogenic Temperature Controller")
         print("1. PIA (Precision Impedance Analyzer)")
         print("2. PSPA (Parameter/Source Analyzer)")
         print("3. LCR (E4980A LCR Meter)")
         print("q. Quit")
         
-        instrument_choice = input("\nEnter your choice (1, 2, 3, or q): ").strip().lower()
+        instrument_choice = input("\nEnter your choice (0, 1, 2, 3, or q): ").strip().lower()
         
         if instrument_choice == 'q':
             log.info("User exited program")
             print("Exiting the program. Goodbye!")
             break
+        elif instrument_choice == '0':
+            # Configure cryogenic parameters
+            cryo_params = cryo.get_cryogenic_parameters()
+            cryo_enabled = True
+            log.info("Cryogenic measurements enabled")
+            print("\nCryogenic integration enabled. Select an instrument to run with temperature control.\n")
+            
+            # After cryo setup, let user select a tool
+            print("="*60)
+            print("SELECT MEASUREMENT TOOL (with cryogenic control)")
+            print("="*60)
+            print("1. PIA (Precision Impedance Analyzer)")
+            print("2. PSPA (Parameter/Source Analyzer)")
+            print("3. LCR (E4980A LCR Meter)")
+            print("b. Back to main menu")
+            
+            tool_choice = input("\nEnter your choice (1, 2, 3, or b): ").strip().lower()
+            
+            if tool_choice == 'b':
+                cryo_enabled = False
+                cryo_params = None
+            elif tool_choice == '1':
+                run_pia_measurements()
+            elif tool_choice == '2':
+                run_pspa_measurements()
+            elif tool_choice == '3':
+                run_lcr_measurements()
+            else:
+                print("Invalid choice.")
         elif instrument_choice == '1':
             run_pia_measurements()
         elif instrument_choice == '2':
@@ -215,13 +323,13 @@ def _pia_cv_butterfly(plot_mode="cp"):
     label = "Cp vs Voltage" if plot_mode == "cp" else "Permittivity vs Voltage"
     print(f"C–V Butterfly Cycle: {label}")
 
-    freq_cv = prompt_float("Enter measurement frequency (Hz)", 25000)
-    v_min = prompt_float("Enter minimum voltage (V)", 0)
-    v_max = prompt_float("Enter maximum voltage (V)", 5)
-    n_points = prompt_int("Enter number of points per sweep", 401)
-    n_cycles = prompt_int("Enter number of cycles", 1)
-    thickness_nm = prompt_float("Enter HZO thickness (nm)", 10.0)
-    diam_um = prompt_float("Enter electrode diameter (µm)", 75.0)
+    freq_cv = safe_float_input("Enter measurement frequency (Hz) [default 25000]: ", 25000)
+    v_min = safe_float_input("Enter minimum voltage (V) [default 0]: ", 0)
+    v_max = safe_float_input("Enter maximum voltage (V) [default 5]: ", 5)
+    n_points = safe_int_input("Enter number of points per sweep [default 401]: ", 401)
+    n_cycles = safe_int_input("Enter number of cycles [default 1]: ", 1)
+    thickness_nm = safe_float_input("Enter HZO thickness (nm) [default 10.0]: ", 10.0)
+    diam_um = safe_float_input("Enter electrode diameter (µm) [default 75.0]: ", 75.0)
 
     with InstrumentSession(pia.setup, _pia_safe_close) as inst:
         pia.initialize_4294a_for_cpd(inst)
@@ -321,118 +429,6 @@ def execute_pia_measurement(choice):
         elif choice == 3:
             # Capacitance vs Frequency
             print("You selected Capacitance vs Frequency measurement.")
-<<<<<<< HEAD
-            
-            # Prompt for parameter duplication
-            if pia.current_parameters["freq_start_hz"] != pia.FREQ_START_HZ or pia.current_parameters["apply_dc_bias"] != pia.APPLY_DC_BIAS:
-                use_last_params = pia.prompt_for_parameter_duplication()
-            else:
-                use_last_params = False
-            
-            # Get frequency and DC bias parameters
-            freq_start, freq_stop, num_points = pia.get_frequency_parameters(use_last=use_last_params)
-            apply_dc_bias, dc_bias_v = pia.get_dc_bias_parameters(use_last=use_last_params)
-            
-            # Call the measurement
-            inst = pia.setup()
-            pia.initialize_4294a_for_cpd(inst)
-            pia.configure_dc_bias(inst, apply_dc_bias, dc_bias_v)
-            freq_axis, cp_vals, d_vals = pia.measure_cpd_vs_freq(inst, freq_start, freq_stop, num_points)
-            
-            # Save Cp plot only
-            file_management.save_image(
-                "Capacitance vs Frequency", "Frequency (Hz)", freq_axis, "Cp (F)", cp_vals,
-                APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v
-            )
-            
-            # Save Cp-D data to CSV
-            csv_data = np.column_stack([freq_axis, cp_vals, d_vals])
-            file_management.save_csv(
-                "cpd_data.csv",
-                csv_data,
-                "frequency_Hz, Cp_F, D"
-            )
-            inst.close()
-            
-        elif choice == 4:
-            # Tan Loss vs Frequency
-            print("You selected Tan Loss vs Frequency measurement.")
-            
-            # Prompt for parameter duplication
-            if pia.current_parameters["freq_start_hz"] != pia.FREQ_START_HZ or pia.current_parameters["apply_dc_bias"] != pia.APPLY_DC_BIAS:
-                use_last_params = pia.prompt_for_parameter_duplication()
-            else:
-                use_last_params = False
-            
-            # Get frequency and DC bias parameters
-            freq_start, freq_stop, num_points = pia.get_frequency_parameters(use_last=use_last_params)
-            apply_dc_bias, dc_bias_v = pia.get_dc_bias_parameters(use_last=use_last_params)
-            
-            # Call the measurement
-            inst = pia.setup()
-            pia.initialize_4294a_for_cpd(inst)
-            pia.configure_dc_bias(inst, apply_dc_bias, dc_bias_v)
-            freq_axis, cp_vals, d_vals = pia.measure_cpd_vs_freq(inst, freq_start, freq_stop, num_points)
-            
-            # Save D plot only
-            file_management.save_image(
-                "Tan Loss vs Frequency", "Frequency (Hz)", freq_axis, "D (loss factor)", d_vals,
-                APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v
-            )
-            
-            # Save Cp-D data to CSV
-            csv_data = np.column_stack([freq_axis, cp_vals, d_vals])
-            file_management.save_csv(
-                "cpd_data.csv",
-                csv_data,
-                "frequency_Hz, Cp_F, D"
-            )
-            inst.close()
-            
-        elif choice == 5:
-            # C–V Butterfly Cycle: Cp vs Voltage
-            print("C–V Butterfly Cycle: Cp vs Voltage")
-            freq_cv = float(input("Enter measurement frequency (Hz) [default 25000]: ") or "25000")
-            v_min = float(input("Enter minimum voltage (V) [default 0]: ") or "0")
-            v_max = float(input("Enter maximum voltage (V) [default 5]: ") or "5")
-            n_points = int(input("Enter number of points per sweep [default 401]: ") or "401")
-            n_cycles = int(input("Enter number of cycles [default 1]: ") or "1")
-            thickness_nm = float(input("Enter HZO thickness (nm) [default 10.0]: ") or "10.0")
-            diam_um = float(input("Enter electrode diameter (µm) [default 75.0]: ") or "75.0")
-            
-            inst = pia.setup()
-            try:
-                pia.initialize_4294a_for_cpd(inst)
-                
-                all_v_cycles = []
-                all_cp_cycles = []
-                all_eps_cycles = []
-                all_cycle_idx = []
-                
-                for cycle in range(n_cycles):
-                    print(f"Running C–V cycle {cycle + 1}/{n_cycles}...")
-                    v, cp = pia.measure_single_cv_cycle(inst, freq_cv, v_min, v_max, n_points)
-                    eps_r = pia.compute_eps_r(cp, thickness_nm, diam_um)
-                    
-                    all_v_cycles.append(v)
-                    all_cp_cycles.append(cp)
-                    all_eps_cycles.append(eps_r)
-                    all_cycle_idx.append(np.full_like(v, cycle + 1, dtype=int))
-                
-                # Flatten for saving
-                v_all = np.concatenate(all_v_cycles)
-                cp_all = np.concatenate(all_cp_cycles)
-                eps_all = np.concatenate(all_eps_cycles)
-                cycles_all = np.concatenate(all_cycle_idx)
-                
-                # Save C–V & εr(V) data
-                csv_data = np.column_stack([cycles_all, v_all, cp_all, eps_all])
-                file_management.save_csv(
-                    "cv_dielectric_cycles.csv",
-                    csv_data,
-                    "cycle_index, bias_V, Cp_F, eps_r"
-                )
-=======
             freq_start, freq_stop, num_points, apply_dc_bias, dc_bias_v = _pia_get_params()
 
             with InstrumentSession(pia.setup, _pia_safe_close) as inst:
@@ -446,11 +442,9 @@ def execute_pia_measurement(choice):
                 )
 
                 csv_data = np.column_stack([freq_axis, cp_vals, d_vals])
-                file_management.save_csv(
-                    "cpd_data.csv", csv_data,
-                    "frequency_Hz, Cp_F, D"
-                )
-
+                file_management.save_csv("cpd_data.csv", csv_data, "frequency_Hz, Cp_F, D")
+                print("Measurement complete. Data saved to output folder.")
+            
         elif choice == 4:
             # Tan Loss vs Frequency
             print("You selected Tan Loss vs Frequency measurement.")
@@ -467,118 +461,71 @@ def execute_pia_measurement(choice):
                 )
 
                 csv_data = np.column_stack([freq_axis, cp_vals, d_vals])
-                file_management.save_csv(
-                    "cpd_data.csv", csv_data,
-                    "frequency_Hz, Cp_F, D"
-                )
-
+                file_management.save_csv("cpd_data.csv", csv_data, "frequency_Hz, Cp_F, D")
+                print("Measurement complete. Data saved to output folder.")
+            
         elif choice == 5:
+            # C–V Butterfly Cycle: Cp vs Voltage
             _pia_cv_butterfly(plot_mode="cp")
->>>>>>> 1df40515fc51d674c57a930ca0d179473eed0b18
 
         elif choice == 6:
-<<<<<<< HEAD
             # C–V Butterfly Cycle: Permittivity vs Voltage
-            print("C–V Butterfly Cycle: Permittivity vs Voltage")
-            freq_cv = float(input("Enter measurement frequency (Hz) [default 25000]: ") or "25000")
-            v_min = float(input("Enter minimum voltage (V) [default 0]: ") or "0")
-            v_max = float(input("Enter maximum voltage (V) [default 5]: ") or "5")
-            n_points = int(input("Enter number of points per sweep [default 401]: ") or "401")
-            n_cycles = int(input("Enter number of cycles [default 1]: ") or "1")
-            thickness_nm = float(input("Enter HZO thickness (nm) [default 10.0]: ") or "10.0")
-            diam_um = float(input("Enter electrode diameter (µm) [default 75.0]: ") or "75.0")
-            
-            inst = pia.setup()
-            try:
-                pia.initialize_4294a_for_cpd(inst)
-                
-                all_v_cycles = []
-                all_cp_cycles = []
-                all_eps_cycles = []
-                all_cycle_idx = []
-                
-                for cycle in range(n_cycles):
-                    print(f"Running C–V cycle {cycle + 1}/{n_cycles}...")
-                    v, cp = pia.measure_single_cv_cycle(inst, freq_cv, v_min, v_max, n_points)
-                    eps_r = pia.compute_eps_r(cp, thickness_nm, diam_um)
-                    
-                    all_v_cycles.append(v)
-                    all_cp_cycles.append(cp)
-                    all_eps_cycles.append(eps_r)
-                    all_cycle_idx.append(np.full_like(v, cycle + 1, dtype=int))
-                
-                # Flatten for saving
-                v_all = np.concatenate(all_v_cycles)
-                cp_all = np.concatenate(all_cp_cycles)
-                eps_all = np.concatenate(all_eps_cycles)
-                cycles_all = np.concatenate(all_cycle_idx)
-                
-                # Save C–V & εr(V) data
-                csv_data = np.column_stack([cycles_all, v_all, cp_all, eps_all])
-                file_management.save_csv(
-                    "cv_dielectric_cycles.csv",
-                    csv_data,
-                    "cycle_index, bias_V, Cp_F, eps_r"
-                )
-=======
             _pia_cv_butterfly(plot_mode="eps")
->>>>>>> 1df40515fc51d674c57a930ca0d179473eed0b18
 
         elif choice == 7:
             # εr vs frequency measurement
             print("Permittivity vs Frequency Measurement")
 
-            if (pia.current_parameters["freq_start_hz"] != pia.FREQ_START_HZ
-                    or pia.current_parameters["apply_dc_bias"] != pia.APPLY_DC_BIAS):
-                use_last_params = pia.prompt_for_parameter_duplication()
-            else:
-                use_last_params = False
+            try:
+                if (pia.current_parameters["freq_start_hz"] != pia.FREQ_START_HZ
+                        or pia.current_parameters["apply_dc_bias"] != pia.APPLY_DC_BIAS):
+                    use_last_params = pia.prompt_for_parameter_duplication()
+                else:
+                    use_last_params = False
 
-            if use_last_params:
-                freq_start = pia.current_parameters["freq_start_hz"]
-                freq_stop = pia.current_parameters["freq_stop_hz"]
-                freq_points = pia.current_parameters["num_points"]
-                bias_voltage = pia.current_parameters["dc_bias_v"]
-            else:
-                freq_start = prompt_float("Enter start frequency (Hz)", 1000)
-                freq_stop = prompt_float("Enter stop frequency (Hz)", 1e6)
-                freq_points = prompt_int("Enter number of frequency points", 201)
-                bias_voltage = prompt_float("Enter DC bias voltage (V)", 0)
+                if use_last_params:
+                    freq_start = pia.current_parameters["freq_start_hz"]
+                    freq_stop = pia.current_parameters["freq_stop_hz"]
+                    freq_points = pia.current_parameters["num_points"]
+                    bias_voltage = pia.current_parameters["dc_bias_v"]
+                else:
+                    freq_start = safe_float_input("Enter start frequency (Hz) [default 1000]: ", 1000)
+                    freq_stop = safe_float_input("Enter stop frequency (Hz) [default 1e6]: ", 1e6)
+                    freq_points = safe_int_input("Enter number of frequency points [default 201]: ", 201)
+                    bias_voltage = safe_float_input("Enter DC bias voltage (V) [default 0]: ", 0)
 
-                pia.current_parameters["freq_start_hz"] = freq_start
-                pia.current_parameters["freq_stop_hz"] = freq_stop
-                pia.current_parameters["num_points"] = freq_points
-                pia.current_parameters["dc_bias_v"] = bias_voltage
-                pia.current_parameters["apply_dc_bias"] = (bias_voltage != 0)
+                    pia.current_parameters["freq_start_hz"] = freq_start
+                    pia.current_parameters["freq_stop_hz"] = freq_stop
+                    pia.current_parameters["num_points"] = freq_points
+                    pia.current_parameters["dc_bias_v"] = bias_voltage
+                    pia.current_parameters["apply_dc_bias"] = (bias_voltage != 0)
 
-            thickness_nm = prompt_float("Enter HZO thickness (nm)", 10.0)
-            diam_um = prompt_float("Enter electrode diameter (µm)", 75.0)
+                thickness_nm = safe_float_input("Enter HZO thickness (nm) [default 10.0]: ", 10.0)
+                diam_um = safe_float_input("Enter electrode diameter (µm) [default 75.0]: ", 75.0)
 
-            with InstrumentSession(pia.setup, _pia_safe_close) as inst:
-                pia.initialize_4294a_for_cpd(inst)
+                with InstrumentSession(pia.setup, _pia_safe_close) as inst:
+                    pia.initialize_4294a_for_cpd(inst)
 
-                print("Running εr vs frequency sweep...")
-                freq_axis, cp_f = pia.measure_eps_vs_freq(inst, freq_start, freq_stop, freq_points, bias_voltage)
-                eps_f = pia.compute_eps_r(cp_f, thickness_nm, diam_um)
+                    print("Running εr vs frequency sweep...")
+                    freq_axis, cp_f = pia.measure_eps_vs_freq(inst, freq_start, freq_stop, freq_points, bias_voltage)
+                    eps_f = pia.compute_eps_r(cp_f, thickness_nm, diam_um)
 
-                csv_data = np.column_stack([freq_axis, cp_f, eps_f])
-<<<<<<< HEAD
-                file_management.save_csv(
-                    "eps_vs_freq.csv",
-                    csv_data,
-                    "frequency_Hz, Cp_F, eps_r"
-                )
-                
-                # Save plot
-=======
-                file_management.save_csv("eps_vs_freq.csv", csv_data, "frequency_Hz, Cp_F, eps_r")
-
->>>>>>> 1df40515fc51d674c57a930ca0d179473eed0b18
-                file_management.save_image(
-                    "Permittivity vs Frequency", "Frequency (Hz)", freq_axis, "Dielectric constant εr", eps_f,
-                    APPLY_DC_BIAS=(bias_voltage != 0), DC_BIAS_V=bias_voltage
-                )
-                print("Frequency sweep complete. Data and plot saved to output folder.")
+                    csv_data = np.column_stack([freq_axis, cp_f, eps_f])
+                    file_management.save_csv(
+                        "eps_vs_freq.csv",
+                        csv_data,
+                        "frequency_Hz, Cp_F, eps_r"
+                    )
+                    
+                    # Save plot
+                    file_management.save_image(
+                        "Permittivity vs Frequency", "Frequency (Hz)", freq_axis, "Dielectric constant εr", eps_f,
+                        APPLY_DC_BIAS=(bias_voltage != 0), DC_BIAS_V=bias_voltage
+                    )
+                    print("Frequency sweep complete. Data and plot saved to output folder.")
+            except Exception as e:
+                log.error("PIA εr vs frequency measurement failed: %s", e)
+                print(f"Error during measurement: {e}")
 
         elif choice == 8:
             # R-X vs Frequency
@@ -686,7 +633,6 @@ def execute_pspa_measurement(choice):
         if choice == 1:
             # PSPA Transistor Output Characteristics
             print("PSPA: Transistor Output Characteristics (Id-Vds curves)")
-<<<<<<< HEAD
             
             vds_start = safe_float_input("Enter start Vds (V) [default 0]: ", 0)
             vds_stop = safe_float_input("Enter stop Vds (V) [default 5]: ", 5)
@@ -701,56 +647,6 @@ def execute_pspa_measurement(choice):
             source_ch = safe_int_input("Enter source channel [default 3]: ", 3)
             
             try:
-                pspa_inst = pspa.connect_pspa()
-                
-                print("\nRunning transistor output characteristics sweep...")
-                data = pspa.measure_transistor_output_characteristics(
-                    pspa_inst, vds_start, vds_stop, vds_step,
-                    vgs_start, vgs_stop, vgs_step,
-                    drain_ch, gate_ch, source_ch, compliance
-                )
-                
-                # Save data to CSV
-                csv_data = np.column_stack([data['Vds'], data['Vgs'], data['Id']])
-                file_management.save_csv(
-                    "transistor_output_chars.csv",
-                    csv_data,
-                    "Vds_V, Vgs_V, Id_A"
-                )
-                
-                # Plot Id vs Vds for each Vgs
-                plt.figure(figsize=(10, 6))
-                vgs_values = np.unique(data['Vgs'])
-                for vgs in vgs_values:
-                    mask = data['Vgs'] == vgs
-                    plt.plot(data['Vds'][mask], data['Id'][mask] * 1e3, marker='o', label=f"Vgs = {vgs:.2f} V")
-                plt.xlabel('Vds (V)')
-                plt.ylabel('Id (mA)')
-                plt.title('Transistor Output Characteristics')
-                plt.legend()
-                plt.grid(True)
-                plt.tight_layout()
-                file_management.ensure_output_dir(os.path.join(file_management.output_dir, "images"))
-                plot_path = file_management.uniquify(os.path.join(file_management.output_dir, "images", "transistor_output_chars.png"))
-                plt.savefig(plot_path, dpi=300)
-                plt.close()
-                print(f"Plot saved: {plot_path}")
-                
-                print("Measurement complete. Data saved to output folder.")
-=======
-
-            vds_start = prompt_float("Enter start Vds (V)", 0)
-            vds_stop = prompt_float("Enter stop Vds (V)", 5)
-            vds_step = prompt_float("Enter Vds step (V)", 0.1)
-            vgs_start = prompt_float("Enter start Vgs (V)", 0)
-            vgs_stop = prompt_float("Enter stop Vgs (V)", 3)
-            vgs_step = prompt_float("Enter Vgs step (V)", 0.5)
-            compliance = prompt_float("Enter current compliance (A)", 0.1)
-            drain_ch = prompt_int("Enter drain channel", 1)
-            gate_ch = prompt_int("Enter gate channel", 2)
-            source_ch = prompt_int("Enter source channel", 3)
-
-            try:
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
                     print("\nRunning transistor output characteristics sweep...")
                     data = pspa.measure_transistor_output_characteristics(
@@ -763,7 +659,8 @@ def execute_pspa_measurement(choice):
                     file_management.save_csv("transistor_output_chars.csv", csv_data, "Vds_V, Vgs_V, Id_A")
 
                     plt.figure(figsize=(10, 6))
-                    for vgs in np.unique(data['Vgs']):
+                    vgs_values = np.unique(data['Vgs'])
+                    for vgs in vgs_values:
                         mask = data['Vgs'] == vgs
                         plt.plot(data['Vds'][mask], data['Id'][mask] * 1e3, marker='o', label=f"Vgs = {vgs:.2f} V")
                     plt.xlabel('Vds (V)')
@@ -774,8 +671,8 @@ def execute_pspa_measurement(choice):
                     plt.tight_layout()
                     file_management.save_plot("transistor_output_chars.png")
                     plt.close()
+
                     print("Measurement complete. Data saved to output folder.")
->>>>>>> 1df40515fc51d674c57a930ca0d179473eed0b18
             except Exception as e:
                 log.error("PSPA output chars failed: %s", e)
                 print(f"Error during measurement: {e}")
@@ -783,7 +680,6 @@ def execute_pspa_measurement(choice):
         elif choice == 2:
             # PSPA Transistor Transfer Characteristics
             print("PSPA: Transistor Transfer Characteristics (Id-Vgs curve)")
-<<<<<<< HEAD
             
             vgs_start = safe_float_input("Enter start Vgs (V) [default -1]: ", -1)
             vgs_stop = safe_float_input("Enter stop Vgs (V) [default 3]: ", 3)
@@ -795,62 +691,6 @@ def execute_pspa_measurement(choice):
             gate_ch = safe_int_input("Enter gate channel [default 2]: ", 2)
             source_ch = safe_int_input("Enter source channel [default 3]: ", 3)
             
-            try:
-                pspa_inst = pspa.connect_pspa()
-                
-                print("\nRunning transistor transfer characteristics sweep...")
-                data = pspa.measure_transistor_transfer_characteristics(
-                    pspa_inst, vgs_start, vgs_stop, vgs_step, vds_constant,
-                    drain_ch, gate_ch, source_ch, compliance
-                )
-                
-                # Save data to CSV
-                csv_data = np.column_stack([data['Vgs'], data['Id'], data['Ig']])
-                file_management.save_csv(
-                    "transistor_transfer_chars.csv",
-                    csv_data,
-                    "Vgs_V, Id_A, Ig_A"
-                )
-                
-                # Plot Id and Ig vs Vgs
-                fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
-                
-                # Linear scale
-                ax1.plot(data['Vgs'], data['Id'] * 1e3, marker='o', label='Id')
-                ax1.set_xlabel('Vgs (V)')
-                ax1.set_ylabel('Id (mA)')
-                ax1.set_title(f'Transfer Characteristics (Vds = {vds_constant} V) - Linear')
-                ax1.grid(True)
-                ax1.legend()
-                
-                # Log scale
-                ax2.semilogy(data['Vgs'], np.abs(data['Id']), marker='o', label='|Id|')
-                ax2.semilogy(data['Vgs'], np.abs(data['Ig']), marker='s', label='|Ig|')
-                ax2.set_xlabel('Vgs (V)')
-                ax2.set_ylabel('Current (A)')
-                ax2.set_title(f'Transfer Characteristics (Vds = {vds_constant} V) - Log')
-                ax2.grid(True)
-                ax2.legend()
-                
-                plt.tight_layout()
-                file_management.ensure_output_dir(os.path.join(file_management.output_dir, "images"))
-                plot_path = file_management.uniquify(os.path.join(file_management.output_dir, "images", "transistor_transfer_chars.png"))
-                plt.savefig(plot_path, dpi=300)
-                plt.close()
-                print(f"Plot saved: {plot_path}")
-                
-                print("Measurement complete. Data saved to output folder.")
-=======
-
-            vgs_start = prompt_float("Enter start Vgs (V)", -1)
-            vgs_stop = prompt_float("Enter stop Vgs (V)", 3)
-            vgs_step = prompt_float("Enter Vgs step (V)", 0.05)
-            vds_constant = prompt_float("Enter constant Vds (V)", 5)
-            compliance = prompt_float("Enter current compliance (A)", 0.1)
-            drain_ch = prompt_int("Enter drain channel", 1)
-            gate_ch = prompt_int("Enter gate channel", 2)
-            source_ch = prompt_int("Enter source channel", 3)
-
             try:
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
                     print("\nRunning transistor transfer characteristics sweep...")
@@ -879,10 +719,10 @@ def execute_pspa_measurement(choice):
                     ax2.legend()
 
                     plt.tight_layout()
-                    file_management.save_plot("transistor_transfer_chars.png")
+                    file_management.save_plot("transistor_transfer_chars.png", fig)
                     plt.close()
+
                     print("Measurement complete. Data saved to output folder.")
->>>>>>> 1df40515fc51d674c57a930ca0d179473eed0b18
             except Exception as e:
                 log.error("PSPA transfer chars failed: %s", e)
                 print(f"Error during measurement: {e}")
@@ -890,7 +730,6 @@ def execute_pspa_measurement(choice):
         elif choice == 3:
             # PSPA I-V Curve (Unidirectional)
             print("PSPA: I-V Curve (Unidirectional)")
-<<<<<<< HEAD
             
             v_start = safe_float_input("Enter start voltage (V) [default 0]: ", 0)
             v_stop = safe_float_input("Enter stop voltage (V) [default 5]: ", 5)
@@ -898,43 +737,6 @@ def execute_pspa_measurement(choice):
             compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
             channel = safe_int_input("Enter channel number [default 1]: ", 1)
             
-            try:
-                pspa_inst = pspa.connect_pspa()
-                
-                print("\nRunning I-V measurement...")
-                data = pspa.measure_iv_curve(pspa_inst, v_start, v_stop, v_step, channel, compliance)
-                
-                # Save data to CSV
-                csv_data = np.column_stack([data['Voltage'], data['Current']])
-                file_management.save_csv(
-                    "iv_curve.csv",
-                    csv_data,
-                    "Voltage_V, Current_A"
-                )
-                
-                # Plot I-V curve
-                plt.figure(figsize=(10, 6))
-                plt.plot(data['Voltage'], data['Current'] * 1e3, marker='o')
-                plt.xlabel('Voltage (V)')
-                plt.ylabel('Current (mA)')
-                plt.title('I-V Curve (Unidirectional)')
-                plt.grid(True)
-                plt.tight_layout()
-                file_management.ensure_output_dir(os.path.join(file_management.output_dir, "images"))
-                plot_path = file_management.uniquify(os.path.join(file_management.output_dir, "images", "iv_curve.png"))
-                plt.savefig(plot_path, dpi=300)
-                plt.close()
-                print(f"Plot saved: {plot_path}")
-                
-                print("Measurement complete. Data saved to output folder.")
-=======
-
-            v_start = prompt_float("Enter start voltage (V)", 0)
-            v_stop = prompt_float("Enter stop voltage (V)", 5)
-            v_step = prompt_float("Enter voltage step (V)", 0.1)
-            compliance = prompt_float("Enter current compliance (A)", 0.1)
-            channel = prompt_int("Enter channel number", 1)
-
             try:
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
                     print("\nRunning I-V measurement...")
@@ -952,8 +754,8 @@ def execute_pspa_measurement(choice):
                     plt.tight_layout()
                     file_management.save_plot("iv_curve.png")
                     plt.close()
+
                     print("Measurement complete. Data saved to output folder.")
->>>>>>> 1df40515fc51d674c57a930ca0d179473eed0b18
             except Exception as e:
                 log.error("PSPA IV curve failed: %s", e)
                 print(f"Error during measurement: {e}")
@@ -961,49 +763,12 @@ def execute_pspa_measurement(choice):
         elif choice == 4:
             # PSPA I-V Curve (Bidirectional)
             print("PSPA: I-V Curve (Bidirectional)")
-<<<<<<< HEAD
             
             v_max = safe_float_input("Enter maximum voltage magnitude (V) [default 5]: ", 5)
             v_step = safe_float_input("Enter voltage step (V) [default 0.1]: ", 0.1)
             compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
             channel = safe_int_input("Enter channel number [default 1]: ", 1)
             
-            try:
-                pspa_inst = pspa.connect_pspa()
-                
-                print("\nRunning bidirectional I-V measurement...")
-                data = pspa.measure_iv_bidirectional(pspa_inst, v_max, v_step, channel, compliance)
-                
-                # Save data to CSV
-                csv_data = np.column_stack([data['Voltage'], data['Current']])
-                file_management.save_csv(
-                    "iv_curve_bidirectional.csv",
-                    csv_data,
-                    "Voltage_V, Current_A"
-                )
-                
-                # Plot I-V curve
-                plt.figure(figsize=(10, 6))
-                plt.plot(data['Voltage'], data['Current'] * 1e3, marker='o')
-                plt.xlabel('Voltage (V)')
-                plt.ylabel('Current (mA)')
-                plt.title('I-V Curve (Bidirectional)')
-                plt.grid(True)
-                plt.tight_layout()
-                file_management.ensure_output_dir(os.path.join(file_management.output_dir, "images"))
-                plot_path = file_management.uniquify(os.path.join(file_management.output_dir, "images", "iv_curve_bidirectional.png"))
-                plt.savefig(plot_path, dpi=300)
-                plt.close()
-                print(f"Plot saved: {plot_path}")
-                
-                print("Measurement complete. Data saved to output folder.")
-=======
-
-            v_max = prompt_float("Enter maximum voltage magnitude (V)", 5)
-            v_step = prompt_float("Enter voltage step (V)", 0.1)
-            compliance = prompt_float("Enter current compliance (A)", 0.1)
-            channel = prompt_int("Enter channel number", 1)
-
             try:
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
                     print("\nRunning bidirectional I-V measurement...")
@@ -1021,8 +786,8 @@ def execute_pspa_measurement(choice):
                     plt.tight_layout()
                     file_management.save_plot("iv_curve_bidirectional.png")
                     plt.close()
+
                     print("Measurement complete. Data saved to output folder.")
->>>>>>> 1df40515fc51d674c57a930ca0d179473eed0b18
             except Exception as e:
                 log.error("PSPA bidirectional IV failed: %s", e)
                 print(f"Error during measurement: {e}")
@@ -1030,7 +795,6 @@ def execute_pspa_measurement(choice):
         elif choice == 5:
             # Pulsed I-V (Single Device)
             print("PSPA: Pulsed I-V (Single Device)")
-<<<<<<< HEAD
             
             v_base = safe_float_input("Enter base voltage (V) [default 0]: ", 0)
             v_pulse = safe_float_input("Enter pulse voltage (V) [default 5]: ", 5)
@@ -1040,56 +804,6 @@ def execute_pspa_measurement(choice):
             compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
             channel = safe_int_input("Enter channel number [default 1]: ", 1)
             
-            try:
-                pspa_inst = pspa.connect_pspa()
-                
-                print("\nRunning pulsed I-V measurement...")
-                data = pspa.measure_pulsed_iv(
-                    pspa_inst, v_base, v_pulse, pulse_width, pulse_period, num_pulses,
-                    channel, compliance
-                )
-                
-                # Save data to CSV
-                csv_data = np.column_stack([data['Time'], data['Voltage'], data['Current']])
-                file_management.save_csv(
-                    "pulsed_iv.csv",
-                    csv_data,
-                    "Time_s, Voltage_V, Current_A"
-                )
-                
-                # Plot pulsed measurements
-                fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
-                
-                ax1.plot(data['Time'] * 1e3, data['Current'] * 1e3, marker='o')
-                ax1.set_xlabel('Time (ms)')
-                ax1.set_ylabel('Current (mA)')
-                ax1.set_title('Pulsed I-V: Current Response')
-                ax1.grid(True)
-                
-                ax2.plot(data['Time'] * 1e3, data['Voltage'], marker='o')
-                ax2.set_xlabel('Time (ms)')
-                ax2.set_ylabel('Voltage (V)')
-                ax2.set_title('Pulsed I-V: Applied Voltage')
-                ax2.grid(True)
-                
-                plt.tight_layout()
-                file_management.ensure_output_dir(os.path.join(file_management.output_dir, "images"))
-                plot_path = file_management.uniquify(os.path.join(file_management.output_dir, "images", "pulsed_iv.png"))
-                plt.savefig(plot_path, dpi=300)
-                plt.close()
-                print(f"Plot saved: {plot_path}")
-                
-                print("Measurement complete. Data saved to output folder.")
-=======
-
-            v_base = prompt_float("Enter base voltage (V)", 0)
-            v_pulse = prompt_float("Enter pulse voltage (V)", 5)
-            pulse_width = prompt_float("Enter pulse width (µs)", 100) * 1e-6
-            pulse_period = prompt_float("Enter pulse period (ms)", 10) * 1e-3
-            num_pulses = prompt_int("Enter number of pulses", 10)
-            compliance = prompt_float("Enter current compliance (A)", 0.1)
-            channel = prompt_int("Enter channel number", 1)
-
             try:
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
                     print("\nRunning pulsed I-V measurement...")
@@ -1115,10 +829,10 @@ def execute_pspa_measurement(choice):
                     ax2.grid(True)
 
                     plt.tight_layout()
-                    file_management.save_plot("pulsed_iv.png")
+                    file_management.save_plot("pulsed_iv.png", fig)
                     plt.close()
+
                     print("Measurement complete. Data saved to output folder.")
->>>>>>> 1df40515fc51d674c57a930ca0d179473eed0b18
             except Exception as e:
                 log.error("PSPA pulsed IV failed: %s", e)
                 print(f"Error during measurement: {e}")
@@ -1126,7 +840,6 @@ def execute_pspa_measurement(choice):
         elif choice == 6:
             # Pulsed Transistor
             print("PSPA: Pulsed Transistor Measurement")
-<<<<<<< HEAD
             print("NOTE: Gate voltage is held constant (DC) while drain is pulsed.")
             
             vds_base = safe_float_input("Enter base Vds (V) [default 0]: ", 0)
@@ -1142,56 +855,6 @@ def execute_pspa_measurement(choice):
             gate_ch = safe_int_input("Enter gate channel [default 2]: ", 2)
             source_ch = safe_int_input("Enter source channel [default 3]: ", 3)
             
-            try:
-                pspa_inst = pspa.connect_pspa()
-                
-                print("\nRunning pulsed transistor measurement...")
-                data = pspa.measure_pulsed_transistor(
-                    pspa_inst, vds_pulse, vgs_pulse, vds_base, vgs_base,
-                    pulse_width, pulse_period, num_pulses,
-                    drain_ch, gate_ch, source_ch, compliance
-                )
-                
-                # Save data to CSV
-                csv_data = np.column_stack([data['Time'], data['Id']])
-                file_management.save_csv(
-                    "pulsed_transistor.csv",
-                    csv_data,
-                    "Time_s, Id_A"
-                )
-                
-                # Plot pulsed measurements
-                plt.figure(figsize=(10, 6))
-                
-                plt.plot(data['Time'] * 1e3, data['Id'] * 1e3, marker='o', label='Id')
-                plt.xlabel('Time (ms)')
-                plt.ylabel('Id (mA)')
-                plt.title(f'Pulsed Transistor: Drain Current (Vds={vds_pulse}V, Vgs={vgs_pulse}V)')
-                plt.grid(True)
-                plt.legend()
-                
-                plt.tight_layout()
-                file_management.ensure_output_dir(os.path.join(file_management.output_dir, "images"))
-                plot_path = file_management.uniquify(os.path.join(file_management.output_dir, "images", "pulsed_transistor.png"))
-                plt.savefig(plot_path, dpi=300)
-                plt.close()
-                print(f"Plot saved: {plot_path}")
-                
-                print("Measurement complete. Data saved to output folder.")
-=======
-
-            vds_base = prompt_float("Enter base Vds (V)", 0)
-            vds_pulse = prompt_float("Enter pulse Vds (V)", 5)
-            vgs_base = prompt_float("Enter base Vgs (V)", 0)
-            vgs_pulse = prompt_float("Enter pulse Vgs (V)", 3)
-            pulse_width = prompt_float("Enter pulse width (µs)", 100) * 1e-6
-            pulse_period = prompt_float("Enter pulse period (ms)", 10) * 1e-3
-            num_pulses = prompt_int("Enter number of pulses", 10)
-            compliance = prompt_float("Enter current compliance (A)", 0.1)
-            drain_ch = prompt_int("Enter drain channel", 1)
-            gate_ch = prompt_int("Enter gate channel", 2)
-            source_ch = prompt_int("Enter source channel", 3)
-
             try:
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
                     print("\nRunning pulsed transistor measurement...")
@@ -1214,8 +877,8 @@ def execute_pspa_measurement(choice):
                     plt.tight_layout()
                     file_management.save_plot("pulsed_transistor.png")
                     plt.close()
+
                     print("Measurement complete. Data saved to output folder.")
->>>>>>> 1df40515fc51d674c57a930ca0d179473eed0b18
             except Exception as e:
                 log.error("PSPA pulsed transistor failed: %s", e)
                 print(f"Error during measurement: {e}")
@@ -1224,12 +887,12 @@ def execute_pspa_measurement(choice):
             # Diode I-V Characteristics
             print("PSPA: Diode I-V Characteristics")
 
-            v_start = prompt_float("Enter start voltage (V)", -1)
-            v_stop = prompt_float("Enter stop voltage (V)", 1)
-            v_step = prompt_float("Enter voltage step (V)", 0.02)
-            compliance = prompt_float("Enter current compliance (A)", 0.1)
-            anode_ch = prompt_int("Enter anode channel", 1)
-            cathode_ch = prompt_int("Enter cathode channel", 2)
+            v_start = safe_float_input("Enter start voltage (V) [default -1]: ", -1)
+            v_stop = safe_float_input("Enter stop voltage (V) [default 1]: ", 1)
+            v_step = safe_float_input("Enter voltage step (V) [default 0.02]: ", 0.02)
+            compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
+            anode_ch = safe_int_input("Enter anode channel [default 1]: ", 1)
+            cathode_ch = safe_int_input("Enter cathode channel [default 2]: ", 2)
 
             try:
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
@@ -1266,12 +929,12 @@ def execute_pspa_measurement(choice):
             # Gate Leakage Current
             print("PSPA: Gate Leakage Current")
 
-            vgs_start = prompt_float("Enter start Vgs (V)", 0)
-            vgs_stop = prompt_float("Enter stop Vgs (V)", 5)
-            vgs_step = prompt_float("Enter Vgs step (V)", 0.1)
-            compliance = prompt_float("Enter current compliance (A)", 1e-3)
-            gate_ch = prompt_int("Enter gate channel", 2)
-            source_ch = prompt_int("Enter source channel", 3)
+            vgs_start = safe_float_input("Enter start Vgs (V) [default 0]: ", 0)
+            vgs_stop = safe_float_input("Enter stop Vgs (V) [default 5]: ", 5)
+            vgs_step = safe_float_input("Enter Vgs step (V) [default 0.1]: ", 0.1)
+            compliance = safe_float_input("Enter current compliance (A) [default 1e-3]: ", 1e-3)
+            gate_ch = safe_int_input("Enter gate channel [default 2]: ", 2)
+            source_ch = safe_int_input("Enter source channel [default 3]: ", 3)
 
             try:
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
@@ -1301,12 +964,12 @@ def execute_pspa_measurement(choice):
             # Breakdown Voltage
             print("PSPA: Breakdown Voltage Measurement")
 
-            v_start = prompt_float("Enter start voltage (V)", 0)
-            v_stop = prompt_float("Enter stop voltage (V)", 40)
-            v_step = prompt_float("Enter voltage step (V)", 0.5)
-            compliance = prompt_float("Enter current compliance (A)", 1e-3)
-            threshold = prompt_float("Enter breakdown current threshold (A)", 1e-4)
-            channel = prompt_int("Enter channel number", 1)
+            v_start = safe_float_input("Enter start voltage (V) [default 0]: ", 0)
+            v_stop = safe_float_input("Enter stop voltage (V) [default 40]: ", 40)
+            v_step = safe_float_input("Enter voltage step (V) [default 0.5]: ", 0.5)
+            compliance = safe_float_input("Enter current compliance (A) [default 1e-3]: ", 1e-3)
+            threshold = safe_float_input("Enter breakdown current threshold (A) [default 1e-4]: ", 1e-4)
+            channel = safe_int_input("Enter channel number [default 1]: ", 1)
 
             try:
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
@@ -1345,11 +1008,11 @@ def execute_pspa_measurement(choice):
             # Resistance Measurement
             print("PSPA: Resistance Measurement (force I, measure V)")
 
-            i_start = prompt_float("Enter start current (A)", 0)
-            i_stop = prompt_float("Enter stop current (A)", 1e-3)
-            i_step = prompt_float("Enter current step (A)", 1e-4)
-            compliance = prompt_float("Enter voltage compliance (V)", 10.0)
-            channel = prompt_int("Enter channel number", 1)
+            i_start = safe_float_input("Enter start current (A) [default 0]: ", 0)
+            i_stop = safe_float_input("Enter stop current (A) [default 1e-3]: ", 1e-3)
+            i_step = safe_float_input("Enter current step (A) [default 1e-4]: ", 1e-4)
+            compliance = safe_float_input("Enter voltage compliance (V) [default 10.0]: ", 10.0)
+            channel = safe_int_input("Enter channel number [default 1]: ", 1)
 
             try:
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
@@ -1415,15 +1078,15 @@ def execute_lcr_measurement(choice):
             # Impedance vs Frequency
             print("LCR: Impedance vs Frequency")
 
-            freq_start = prompt_float("Enter start frequency (Hz)", 20)
-            freq_stop = prompt_float("Enter stop frequency (Hz)", 2e6)
-            num_points = prompt_int("Enter number of points", 201)
+            freq_start = safe_float_input("Enter start frequency (Hz) [default 20]: ", 20)
+            freq_stop = safe_float_input("Enter stop frequency (Hz) [default 2e6]: ", 2e6)
+            num_points = safe_int_input("Enter number of points [default 201]: ", 201)
             sweep_type = prompt_choice("Sweep type", ["LIN", "LOG"], "LOG")
-            ac_level = prompt_float("Enter AC level (V)", 1.0)
+            ac_level = safe_float_input("Enter AC level (V) [default 1.0]: ", 1.0)
             apply_bias = prompt_bool("Apply DC bias?", False)
             bias_v = 0.0
             if apply_bias:
-                bias_v = prompt_float("Enter DC bias (V)", 0)
+                bias_v = safe_float_input("Enter DC bias (V) [default 0]: ", 0)
 
             try:
                 with InstrumentSession(
@@ -1462,16 +1125,16 @@ def execute_lcr_measurement(choice):
             # Capacitance vs Frequency
             print("LCR: Capacitance vs Frequency")
 
-            freq_start = prompt_float("Enter start frequency (Hz)", 20)
-            freq_stop = prompt_float("Enter stop frequency (Hz)", 2e6)
-            num_points = prompt_int("Enter number of points", 201)
+            freq_start = safe_float_input("Enter start frequency (Hz) [default 20]: ", 20)
+            freq_stop = safe_float_input("Enter stop frequency (Hz) [default 2e6]: ", 2e6)
+            num_points = safe_int_input("Enter number of points [default 201]: ", 201)
             sweep_type = prompt_choice("Sweep type", ["LIN", "LOG"], "LOG")
             mode = prompt_choice("Measurement mode", ["CPD", "CSRS", "CPRP"], "CPD")
-            ac_level = prompt_float("Enter AC level (V)", 1.0)
+            ac_level = safe_float_input("Enter AC level (V) [default 1.0]: ", 1.0)
             apply_bias = prompt_bool("Apply DC bias?", False)
             bias_v = 0.0
             if apply_bias:
-                bias_v = prompt_float("Enter DC bias (V)", 0)
+                bias_v = safe_float_input("Enter DC bias (V) [default 0]: ", 0)
 
             try:
                 with InstrumentSession(
@@ -1511,12 +1174,12 @@ def execute_lcr_measurement(choice):
             # Inductance vs Frequency
             print("LCR: Inductance vs Frequency")
 
-            freq_start = prompt_float("Enter start frequency (Hz)", 20)
-            freq_stop = prompt_float("Enter stop frequency (Hz)", 2e6)
-            num_points = prompt_int("Enter number of points", 201)
+            freq_start = safe_float_input("Enter start frequency (Hz) [default 20]: ", 20)
+            freq_stop = safe_float_input("Enter stop frequency (Hz) [default 2e6]: ", 2e6)
+            num_points = safe_int_input("Enter number of points [default 201]: ", 201)
             sweep_type = prompt_choice("Sweep type", ["LIN", "LOG"], "LOG")
             mode = prompt_choice("Measurement mode", ["LPQ", "LSD"], "LPQ")
-            ac_level = prompt_float("Enter AC level (V)", 1.0)
+            ac_level = safe_float_input("Enter AC level (V) [default 1.0]: ", 1.0)
 
             try:
                 with InstrumentSession(
@@ -1555,11 +1218,11 @@ def execute_lcr_measurement(choice):
             # C-V Sweep (Single)
             print("LCR: C-V Sweep (Single Direction)")
 
-            freq = prompt_float("Enter measurement frequency (Hz)", 1000)
-            v_min = prompt_float("Enter minimum voltage (V)", -5)
-            v_max = prompt_float("Enter maximum voltage (V)", 5)
-            num_points = prompt_int("Enter number of points", 201)
-            ac_level = prompt_float("Enter AC level (V)", 0.1)
+            freq = safe_float_input("Enter measurement frequency (Hz) [default 1000]: ", 1000)
+            v_min = safe_float_input("Enter minimum voltage (V) [default -5]: ", -5)
+            v_max = safe_float_input("Enter maximum voltage (V) [default 5]: ", 5)
+            num_points = safe_int_input("Enter number of points [default 201]: ", 201)
+            ac_level = safe_float_input("Enter AC level (V) [default 0.1]: ", 0.1)
 
             try:
                 with InstrumentSession(
@@ -1596,18 +1259,18 @@ def execute_lcr_measurement(choice):
             # C-V Butterfly Cycles
             print("LCR: C-V Butterfly Cycles")
 
-            freq = prompt_float("Enter measurement frequency (Hz)", 1000)
-            v_min = prompt_float("Enter minimum voltage (V)", -5)
-            v_max = prompt_float("Enter maximum voltage (V)", 5)
-            num_points = prompt_int("Enter number of points per direction", 201)
-            num_cycles = prompt_int("Enter number of cycles", 1)
-            ac_level = prompt_float("Enter AC level (V)", 0.1)
+            freq = safe_float_input("Enter measurement frequency (Hz) [default 1000]: ", 1000)
+            v_min = safe_float_input("Enter minimum voltage (V) [default -5]: ", -5)
+            v_max = safe_float_input("Enter maximum voltage (V) [default 5]: ", 5)
+            num_points = safe_int_input("Enter number of points per direction [default 201]: ", 201)
+            num_cycles = safe_int_input("Enter number of cycles [default 1]: ", 1)
+            ac_level = safe_float_input("Enter AC level (V) [default 0.1]: ", 0.1)
             calc_eps = prompt_bool("Calculate permittivity?", False)
             thickness_nm = 0.0
             diameter_um = 0.0
             if calc_eps:
-                thickness_nm = prompt_float("Enter dielectric thickness (nm)", 10)
-                diameter_um = prompt_float("Enter electrode diameter (µm)", 75)
+                thickness_nm = safe_float_input("Enter dielectric thickness (nm) [default 10]: ", 10)
+                diameter_um = safe_float_input("Enter electrode diameter (µm) [default 75]: ", 75)
 
             try:
                 with InstrumentSession(
@@ -1667,12 +1330,12 @@ def execute_lcr_measurement(choice):
             # Single Point Impedance
             print("LCR: Single Point Impedance Measurement")
 
-            freq = prompt_float("Enter frequency (Hz)", 1000)
-            ac_level = prompt_float("Enter AC level (V)", 1.0)
+            freq = safe_float_input("Enter frequency (Hz) [default 1000]: ", 1000)
+            ac_level = safe_float_input("Enter AC level (V) [default 1.0]: ", 1.0)
             apply_bias = prompt_bool("Apply DC bias?", False)
             bias_v = 0.0
             if apply_bias:
-                bias_v = prompt_float("Enter DC bias (V)", 0)
+                bias_v = safe_float_input("Enter DC bias (V) [default 0]: ", 0)
 
             try:
                 with InstrumentSession(
@@ -1702,19 +1365,19 @@ def execute_lcr_measurement(choice):
             # Single Point Capacitance
             print("LCR: Single Point Capacitance Measurement")
 
-            freq = prompt_float("Enter frequency (Hz)", 1000)
+            freq = safe_float_input("Enter frequency (Hz) [default 1000]: ", 1000)
             mode = prompt_choice("Measurement mode", ["CPD", "CSRS", "CPRP"], "CPD")
-            ac_level = prompt_float("Enter AC level (V)", 1.0)
+            ac_level = safe_float_input("Enter AC level (V) [default 1.0]: ", 1.0)
             apply_bias = prompt_bool("Apply DC bias?", False)
             bias_v = 0.0
             if apply_bias:
-                bias_v = prompt_float("Enter DC bias (V)", 0)
+                bias_v = safe_float_input("Enter DC bias (V) [default 0]: ", 0)
             calc_eps = prompt_bool("Calculate permittivity?", False)
             thickness_nm = 0.0
             diameter_um = 0.0
             if calc_eps:
-                thickness_nm = prompt_float("Enter dielectric thickness (nm)", 10)
-                diameter_um = prompt_float("Enter electrode diameter (µm)", 75)
+                thickness_nm = safe_float_input("Enter dielectric thickness (nm) [default 10]: ", 10)
+                diameter_um = safe_float_input("Enter electrode diameter (µm) [default 75]: ", 75)
 
             try:
                 with InstrumentSession(
@@ -1746,12 +1409,12 @@ def execute_lcr_measurement(choice):
             # Quality Factor (Q) vs Frequency
             print("LCR: Quality Factor (Q) vs Frequency")
 
-            freq_start = prompt_float("Enter start frequency (Hz)", 20)
-            freq_stop = prompt_float("Enter stop frequency (Hz)", 2e6)
-            num_points = prompt_int("Enter number of points", 201)
+            freq_start = safe_float_input("Enter start frequency (Hz) [default 20]: ", 20)
+            freq_stop = safe_float_input("Enter stop frequency (Hz) [default 2e6]: ", 2e6)
+            num_points = safe_int_input("Enter number of points [default 201]: ", 201)
             sweep_type = prompt_choice("Sweep type", ["LIN", "LOG"], "LOG")
             mode = prompt_choice("Measurement mode", ["CPQ", "LPQ"], "CPQ")
-            ac_level = prompt_float("Enter AC level (V)", 1.0)
+            ac_level = safe_float_input("Enter AC level (V) [default 1.0]: ", 1.0)
 
             try:
                 with InstrumentSession(
@@ -1785,11 +1448,11 @@ def execute_lcr_measurement(choice):
             # R-X vs Frequency
             print("LCR: R-X (Resistance-Reactance) vs Frequency")
 
-            freq_start = prompt_float("Enter start frequency (Hz)", 20)
-            freq_stop = prompt_float("Enter stop frequency (Hz)", 2e6)
-            num_points = prompt_int("Enter number of points", 201)
+            freq_start = safe_float_input("Enter start frequency (Hz) [default 20]: ", 20)
+            freq_stop = safe_float_input("Enter stop frequency (Hz) [default 2e6]: ", 2e6)
+            num_points = safe_int_input("Enter number of points [default 201]: ", 201)
             sweep_type = prompt_choice("Sweep type", ["LIN", "LOG"], "LOG")
-            ac_level = prompt_float("Enter AC level (V)", 1.0)
+            ac_level = safe_float_input("Enter AC level (V) [default 1.0]: ", 1.0)
 
             try:
                 with InstrumentSession(
@@ -1823,11 +1486,11 @@ def execute_lcr_measurement(choice):
             # G-B vs Frequency
             print("LCR: G-B (Conductance-Susceptance) vs Frequency")
 
-            freq_start = prompt_float("Enter start frequency (Hz)", 20)
-            freq_stop = prompt_float("Enter stop frequency (Hz)", 2e6)
-            num_points = prompt_int("Enter number of points", 201)
+            freq_start = safe_float_input("Enter start frequency (Hz) [default 20]: ", 20)
+            freq_stop = safe_float_input("Enter stop frequency (Hz) [default 2e6]: ", 2e6)
+            num_points = safe_int_input("Enter number of points [default 201]: ", 201)
             sweep_type = prompt_choice("Sweep type", ["LIN", "LOG"], "LOG")
-            ac_level = prompt_float("Enter AC level (V)", 1.0)
+            ac_level = safe_float_input("Enter AC level (V) [default 1.0]: ", 1.0)
 
             try:
                 with InstrumentSession(
@@ -1865,7 +1528,7 @@ def execute_lcr_measurement(choice):
             print("  3. Open + Short (recommended)")
             print("  4. Disable all corrections")
 
-            corr_choice = prompt_int("Select correction type", 3)
+            corr_choice = safe_int_input("Select correction type [default 3]: ", 3)
 
             try:
                 with InstrumentSession(
