@@ -227,6 +227,36 @@ def disable_ramp(cryo, loop=1):
         log.error(f"Error disabling ramp: {e}")
 
 
+def hold_temperature(cryo, loop=1):
+    """
+    Hold temperature constant by pausing the ramp.
+
+    The controller maintains the current setpoint but stops ramping
+    toward any new setpoint.  Call resume_ramp_to_next() to continue.
+
+    Args:
+        cryo: VISA instrument instance
+        loop: Control loop number
+    """
+    disable_ramp(cryo, loop)
+    log.info("Temperature hold: ramp paused, maintaining current setpoint")
+    print("  Temperature hold active (ramp paused)")
+
+
+def resume_ramp_to_next(cryo, target_temp_k, ramp_rate, loop=1):
+    """
+    Resume ramping to a new temperature setpoint.
+
+    Args:
+        cryo: VISA instrument instance
+        target_temp_k: Next target temperature (K)
+        ramp_rate: Ramp rate in K/min
+        loop: Control loop number
+    """
+    set_temperature_setpoint(cryo, target_temp_k, loop)
+    set_ramp_rate(cryo, ramp_rate, loop)
+
+
 def wait_for_temperature(cryo, target_temp_k, tolerance_k=TEMP_TOLERANCE_K, 
                          max_wait_s=3600, stability_time_s=TEMP_STABILITY_TIME_S, loop=1):
     """
