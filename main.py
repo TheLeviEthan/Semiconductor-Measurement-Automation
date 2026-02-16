@@ -148,23 +148,23 @@ def run_cryo_sweep(measurement_queue):
             print(f"{'─'*60}")
 
             # Ramp to target temperature
-            cryo.resume_ramp_to_next(cryocon, target_temp, ramp_rate, loop=1)
+            cryo.resume_ramp_to_next(cryocon, target_temp, ramp_rate, loop=2)
 
             # Wait for temperature to stabilise
             success = cryo.wait_for_temperature(
                 cryocon, target_temp,
                 tolerance_k=cryo.TEMP_TOLERANCE_K,
                 stability_time_s=cryo.TEMP_STABILITY_TIME_S,
-                loop=1)
+                loop=2)
 
             if not success:
                 log.warning("Temperature stabilisation failed at point %d", temp_idx + 1)
                 print(f"Warning: stabilisation failed at {target_temp:.2f} K – continuing anyway…")
 
             # HOLD temperature — pause ramp while measurements run
-            cryo.hold_temperature(cryocon, loop=1)
+            cryo.hold_temperature(cryocon, loop=2)
 
-            current_temp = cryo.get_current_temperature(cryocon, loop=1)
+            current_temp = cryo.get_current_temperature(cryocon, loop=2)
             if current_temp is not None:
                 print(f"  Confirmed temperature: {current_temp:.2f} K")
 
@@ -186,7 +186,7 @@ def run_cryo_sweep(measurement_queue):
             print(f"\nAll measurements done at {target_temp:.2f} K")
 
         # Finished sweep
-        cryo.disable_ramp(cryocon, loop=1)
+        cryo.disable_ramp(cryocon, loop=2)
         cryo.disconnect_cryocon(cryocon)
         cryocon = None
 
@@ -205,7 +205,7 @@ def run_cryo_sweep(measurement_queue):
         file_management.set_output_dir(base_output_dir)
         if cryocon is not None:
             try:
-                cryo.disable_ramp(cryocon, loop=1)
+                cryo.disable_ramp(cryocon, loop=2)
                 cryo.disconnect_cryocon(cryocon)
             except Exception:
                 pass
