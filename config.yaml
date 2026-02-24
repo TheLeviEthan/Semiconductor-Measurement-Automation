@@ -9,8 +9,9 @@
 gpib:
   pia:  "GPIB0::24::INSTR"
   pspa: "GPIB0::16::INSTR"
-  lcr:  "GPIB0::___::INSTR"   # fill in when E4980A is on the bench
-  delta: "GPIB0::27::INSTR"
+  lcr:  "GPIB0::_____::INSTR"   # fill in when E4980A is on the bench
+  delta: "GPIB0::27::INSTR"   # fill in when E4980A is on the bench
+
 
 # --- PIA (4294A) defaults ---
 pia:
