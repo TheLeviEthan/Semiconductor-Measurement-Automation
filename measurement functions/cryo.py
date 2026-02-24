@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 # =============================
 # User settings and constants
 # =============================
-GPIB_ADDRESS = "GPIB0::___::INSTR"   # GPIB address for Cryocon 32B (to be configured)
+GPIB_ADDRESS = "GPIB0::12::INSTR"   # GPIB address for Cryocon 32B (to be configured)
 
 # Temperature limits and defaults
 TEMP_MIN_K = 1.4                    # Minimum temperature (K)

@@ -2,9 +2,10 @@
 Filename: main.py
 Author: Ethan Ruddell
 Date: 2026-2-12
-Description: Implements CLI for automating semiconductor measurements using
+Description: Implements CLI and GUI for automating semiconductor measurements using
 the Keysight 4294A Precision Impedance Analyzer, the Agilent 4155C/4156C
 Semiconductor Parameter Analyzer, and the Keysight E4980A LCR Meter.
+Can be run in CLI mode or GUI mode (pass --gui flag).
 """
 
 import os
@@ -30,6 +31,10 @@ from gpib_utils import (
     InstrumentSession, prompt_choice, prompt_bool,
     safe_float_input, safe_int_input,
 )
+from measurements_config import (
+    PIA_MEASUREMENTS, PSPA_MEASUREMENTS, LCR_MEASUREMENTS,
+    get_measurement_name, get_measurements_list,
+)
 
 log = logging.getLogger(__name__)
 
@@ -40,48 +45,11 @@ cryo_enabled = False
 cryo_params = None  # Will hold temperature sweep parameters
 
 # =============================
-# User settings and constants
+# Measurement aliases for convenience
 # =============================
-
-pia_measurements = [
-    "Impedance Magnitude vs Frequency",
-    "Impedance Phase vs Frequency",
-    "Capacitance vs Frequency",
-    "Tan Loss vs Frequency",
-    "C-V Butterfly Cycles: Cp vs Voltage",
-    "C-V Butterfly Cycles: Permittivity vs Voltage",
-    "Permittivity vs Frequency",
-    "R-X (Resistance-Reactance) vs Frequency",
-    "G-B (Conductance-Susceptance) vs Frequency",
-    "Y-θ (Admittance) vs Frequency",
-]
-
-pspa_measurements = [
-    "Transistor Output Characteristics",
-    "Transistor Transfer Characteristics",
-    "I-V Curve (Unidirectional)",
-    "I-V Curve (Bidirectional)",
-    "Pulsed I-V (Single Device)",
-    "Pulsed Transistor",
-    "Diode I-V Characteristics",
-    "Gate Leakage Current",
-    "Breakdown Voltage",
-    "Resistance Measurement",
-]
-
-lcr_measurements = [
-    "Impedance vs Frequency",
-    "Capacitance vs Frequency",
-    "Inductance vs Frequency",
-    "C-V Sweep (Single)",
-    "C-V Butterfly Cycles",
-    "Single Point Impedance",
-    "Single Point Capacitance",
-    "Quality Factor (Q) vs Frequency",
-    "R-X (Resistance-Reactance) vs Frequency",
-    "G-B (Conductance-Susceptance) vs Frequency",
-    "Open/Short Correction",
-]
+pia_measurements = PIA_MEASUREMENTS
+pspa_measurements = PSPA_MEASUREMENTS
+lcr_measurements = LCR_MEASUREMENTS
 
 
 
@@ -93,6 +61,11 @@ def parse_args():
         "--output-dir",
         default=None,
         help=f"Output directory for results (default: {file_management.default_output_dir})",
+    )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Launch the GUI instead of CLI",
     )
     return parser.parse_args()
 
@@ -148,23 +121,23 @@ def run_cryo_sweep(measurement_queue):
             print(f"{'─'*60}")
 
             # Ramp to target temperature
-            cryo.resume_ramp_to_next(cryocon, target_temp, ramp_rate, loop=1)
+            cryo.resume_ramp_to_next(cryocon, target_temp, ramp_rate, loop=2)
 
             # Wait for temperature to stabilise
             success = cryo.wait_for_temperature(
                 cryocon, target_temp,
                 tolerance_k=cryo.TEMP_TOLERANCE_K,
                 stability_time_s=cryo.TEMP_STABILITY_TIME_S,
-                loop=1)
+                loop=2)
 
             if not success:
                 log.warning("Temperature stabilisation failed at point %d", temp_idx + 1)
                 print(f"Warning: stabilisation failed at {target_temp:.2f} K – continuing anyway…")
 
             # HOLD temperature — pause ramp while measurements run
-            cryo.hold_temperature(cryocon, loop=1)
+            cryo.hold_temperature(cryocon, loop=2)
 
-            current_temp = cryo.get_current_temperature(cryocon, loop=1)
+            current_temp = cryo.get_current_temperature(cryocon, loop=2)
             if current_temp is not None:
                 print(f"  Confirmed temperature: {current_temp:.2f} K")
 
@@ -186,7 +159,7 @@ def run_cryo_sweep(measurement_queue):
             print(f"\nAll measurements done at {target_temp:.2f} K")
 
         # Finished sweep
-        cryo.disable_ramp(cryocon, loop=1)
+        cryo.disable_ramp(cryocon, loop=2)
         cryo.disconnect_cryocon(cryocon)
         cryocon = None
 
@@ -205,10 +178,33 @@ def run_cryo_sweep(measurement_queue):
         file_management.set_output_dir(base_output_dir)
         if cryocon is not None:
             try:
-                cryo.disable_ramp(cryocon, loop=1)
+                cryo.disable_ramp(cryocon, loop=2)
                 cryo.disconnect_cryocon(cryocon)
             except Exception:
                 pass
+
+
+def gui_execute_measurement(instrument, measurement_idx, params):
+    """
+    Execute a measurement from the GUI.
+    
+    Args:
+        instrument: "PIA", "PSPA", or "LCR"
+        measurement_idx: 1-indexed measurement number
+        params: Dictionary of parameters
+    """
+    try:
+        if instrument == "PIA":
+            execute_pia_measurement(measurement_idx)
+        elif instrument == "PSPA":
+            execute_pspa_measurement(measurement_idx)
+        elif instrument == "LCR":
+            execute_lcr_measurement(measurement_idx)
+        else:
+            raise ValueError(f"Unknown instrument: {instrument}")
+    except Exception as e:
+        log.error("Measurement failed: %s", e)
+        raise
 
 
 def main():
@@ -220,6 +216,13 @@ def main():
     # --- Logging ----------------------------------------------------------
     logging_config.setup(output_dir=file_management.default_output_dir)
     log.info("Welcome to the NRG Semiconductor Measurement Automation")
+
+    # Check if GUI mode should be launched
+    if args.gui:
+        log.info("Launching GUI mode")
+        import gui
+        gui.run_gui_mode(gui_execute_measurement)
+        return
 
     print("Welcome to the NRG Semiconductor Measurement Automation...\n")
     

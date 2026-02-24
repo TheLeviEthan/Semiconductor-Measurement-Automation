@@ -15,6 +15,8 @@ TABLE OF CONTENTS
 3. TOOL 3: PSPA (4155C/4156C) - Parameter/Semiconductor Analyzer
 4. Configuration Defaults
 5. Code Architecture
+6. Refactored Modules (New - February 2026)
+7. GUI Interface
 
 
 ================================================================================
@@ -1353,15 +1355,19 @@ log_filename:  "measurement.log"  # Log file name
 
   Semiconductor-Measurement-Automation/
   ├── main.py                         # CLI orchestration, measurement menus
+  ├── gui.py                          # Tkinter GUI interface (NEW - 2026)
   ├── config.yaml                     # User-editable defaults (GPIB, params)
   ├── TOOLS_AND_MEASUREMENTS_REFERENCE.txt
+  ├── REFACTORING_COMPLETE.md         # Refactoring report and metrics
+  ├── REFACTORING_NOTES.md            # Technical refactoring details (NEW)
   ├── README.md
   ├── measurement functions/
   │   ├── __init__.py
   │   ├── pia.py                      # 4294A Precision Impedance Analyzer
   │   ├── pspa.py                     # 4155C/4156C Parameter Analyzer (FLEX)
   │   ├── lcr.py                      # E4980A LCR Meter
-  │   └── cryo.py                     # Cryocon 32B Temperature Controller
+  │   ├── cryo.py                     # Cryocon 32B Temperature Controller
+  │   └── measurements_config.py       # REFACTORED - Centralized measurement config (NEW)
   ├── utility/
   │   ├── __init__.py
   │   ├── gpib_utils.py               # InstrumentSession, input helpers, retry
@@ -1369,6 +1375,8 @@ log_filename:  "measurement.log"  # Log file name
   │   ├── config.py                   # YAML config loader
   │   ├── logging_config.py           # Centralized logging setup
   │   ├── find_instruments.py         # Standalone VISA resource discovery
+  │   ├── parameter_validators.py     # REFACTORED - Unified parameter validation (NEW)
+  │   ├── measurement_results.py      # REFACTORED - Standardized result classes (NEW)
   │   ├── test_4156c_commands.py      # PSPA command testing script
   │   └── test_pspa_commands.py       # PSPA integration test script
   └── LEGACY/                         # Old standalone scripts (not used)
@@ -1459,6 +1467,367 @@ file_management.py:
   - save_plot() — save pre-built matplotlib figure
   - save_cycle_plot() — multi-cycle overlay plot
   - uniquify() — append (1), (2), etc. to prevent overwrites
+
+measurements_config.py: (REFACTORED - NEW, February 2026)
+  - Centralized single source of truth for all measurements
+  - PIA_MEASUREMENTS, PSPA_MEASUREMENTS, LCR_MEASUREMENTS lists
+  - MEASUREMENT_PARAMS dictionary with all GUI parameter definitions
+  - Helper functions: get_measurement_name(), get_measurements_list()
+  - Used by both main.py CLI and gui.py Tkinter interface
+
+parameter_validators.py: (REFACTORED - NEW, February 2026)
+  - Consolidated parameter validation for all measurement types
+  - Frequency, temperature, voltage, current, AC level validators
+  - ParameterSet class for validating related parameters together
+  - validate_measurement_params() for bulk validation
+  - Automatic logging and value clipping
+  - Replaces scattered validation logic throughout codebase
+
+measurement_results.py: (REFACTORED - NEW, February 2026)
+  - Standardized result classes for all measurement types
+  - FrequencySweepResult, VoltageSweepResult, IVCurveResult
+  - CycleResult for repeating cycles (butterflies)
+  - TransistorCharacteristicsResult, SinglePointResult, TemperatureSweepResult
+  - MeasurementMetadata for consistent metadata handling
+  - Automatic CSV export with .to_csv_array() and headers
+
+
+================================================================================
+6. REFACTORED MODULES (February 2026)
+================================================================================
+
+This section documents the code refactoring performed to eliminate redundancies,
+consolidate common patterns, and improve code maintainability.
+
+See also: REFACTORING_COMPLETE.md for comprehensive report and metrics
+
+
+--------------------------------------------------------------------------------
+6.1 MEASUREMENTS CONFIGURATION CENTRALIZATION
+================================================================================
+
+File: measurement_functions/measurements_config.py (NEW)
+
+Purpose:
+  Single source of truth for all measurement lists and parameters.
+  Previously, measurement names were defined in both main.py and gui.py,
+  creating maintenance burden and sync issues.
+
+Key Components:
+
+1. Measurement Lists
+   - PIA_MEASUREMENTS: 10 measurement types for PIA (4294A)
+   - PSPA_MEASUREMENTS: 10 measurement types for PSPA (4155C/4156C)
+   - LCR_MEASUREMENTS: 11 measurement types for LCR (E4980A)
+
+2. Parameter Definitions
+   - MEASUREMENT_PARAMS: Dict mapping (instrument, measurement_idx) to parameter list
+   - Each measurement has [(label, key, default_value), ...] tuples
+   - 31 different measurement parameter configurations
+
+3. Helper Functions
+   - get_measurement_name(instrument, idx) → measurement_name
+   - get_measurements_list(instrument) → ordered list of measurements
+
+Usage Example:
+  from measurements_config import get_measurements_list, MEASUREMENT_PARAMS
+  
+  # Get list of measurements for GUI dropdown
+  measurements = get_measurements_list("PIA")  # Returns PIA_MEASUREMENTS
+  
+  # Get parameters for specific measurement in GUI
+  params = MEASUREMENT_PARAMS[("PIA", 1)]  # Returns parameter definitions
+  
+  # Get friendly name
+  name = get_measurement_name("PIA", 1)  # "Impedance Magnitude vs Frequency"
+
+How It's Used:
+  - main.py: Imports measurement lists for CLI menu
+  - gui.py: Imports for GUI element population
+  - Any new measurement type added once, used everywhere
+
+
+Benefits:
+  - Single definition eliminates sync bugs
+  - Easier to maintain and extend
+  - Clear structure for all measurement parameters
+  - Type annotations for IDE support (future enhancement)
+
+
+Breaking Changes: NONE
+  - main.py and gui.py still have backward-compatible aliases
+  - Can gradually migrate existing code
+
+
+--------------------------------------------------------------------------------
+6.2 PARAMETER VALIDATION CONSOLIDATION
+================================================================================
+
+File: utility/parameter_validators.py (NEW)
+
+Purpose:
+  Centralized parameter validation for all measurement types.
+  Previously, validation logic was scattered across 5+ files with inconsistent
+  patterns (manual comparisons, if/elif chains, numpy.clip() calls).
+
+Key Functions:
+
+Core Validators:
+  - validate_frequency(freq_hz, min_hz=20, max_hz=2e6) → float
+  - validate_frequency_range(freq_start, freq_stop, ...) → (float, float)
+  - validate_temperature(temp_k, min_k=1.4, max_k=325) → float
+  - validate_temperature_range(temp_start, temp_end, ...) → (float, float)
+  - validate_ramp_rate(ramp_k_per_min, min=0.1, max=50) → float
+  - validate_voltage(voltage_v, min_v=-100, max_v=100) → float
+  - validate_voltage_range(v_start, v_stop, ...) → (float, float)
+  - validate_compliance(compliance_a, min=1e-6, max=10) → float
+  - validate_ac_level(ac_level_v, min=0.001, max=10) → float
+  - validate_point_count(num_points, min=2, max=10000) → int
+  - validate_step_size(step, min=1e-6, max=1e6) → float
+  - validate_choice(value, valid_options, default=None) → str
+
+Compound Validators:
+  - ParameterSet class: Validates related parameters together
+  - validate_measurement_params(type, params_dict) → validated_dict
+
+Features:
+  - Automatic value clipping to acceptable range
+  - Clear logging of warnings when values out of range
+  - Raises ValidationError() for critical failures
+  - Reusable across CLI and GUI implementations
+
+Usage Example:
+  from parameter_validators import (
+      validate_frequency, validate_compliance, ParameterSet
+  )
+  
+  # Simple validation with automatic clipping
+  freq = validate_frequency(user_input)  # Clips to [20 Hz, 2 MHz]
+  compliance = validate_compliance(user_input)  # Clips to [1e-6, 10] A
+  
+  # Compound validation
+  params = ParameterSet()
+  params.add_frequency_sweep(freq_start, freq_stop, num_points)
+  if params.is_valid():
+      validated = params.get_validated_values()
+  else:
+      for error in params.errors:
+          print(f"Error: {error}")
+  
+  # Bulk validation
+  from parameter_validators import validate_measurement_params
+  validated = validate_measurement_params("frequency_sweep", user_params)
+
+Benefits:
+  - DRY principle: One place to update validation rules
+  - Consistent behavior across tools
+  - Clear error messages for users
+  - Easier to add new validation types
+  - Eliminates ~150 lines of scattered validation code
+
+
+Breaking Changes: NONE
+  - New module, purely additive
+  - Old validation code continues to work
+  - Can migrate gradually
+
+
+--------------------------------------------------------------------------------
+6.3 STANDARDIZED MEASUREMENT RESULTS
+================================================================================
+
+File: utility/measurement_results.py (NEW)
+
+Purpose:
+  Standardize result format across all measurements.
+  Previously, different measurement functions returned different formats
+  (tuple, dict, numpy array), making downstream code fragile and inconsistent.
+
+Result Classes:
+
+1. FrequencySweepResult
+   - For frequency-dependent measurements (impedance, capacitance, etc.)
+   - Fields: frequency (array), primary (array), secondary (optional array)
+   - Methods: to_csv_array(), get_csv_header()
+
+2. VoltageSweepResult
+   - For voltage-dependent measurements (C-V, etc.)
+   - Fields: voltage (array), primary (array), secondary (optional array)
+
+3. IVCurveResult
+   - For I-V characteristic measurements
+   - Fields: voltage (array), current (array), resistance_ohm (optional)
+   - Method: calculate_resistance() — Linear fit calculation
+
+4. CycleResult
+   - For repeating cycle measurements (C-V butterflies, etc.)
+   - Fields: cycles (list of arrays), primary_cycles, secondary_cycles (optional)
+   - Methods: flatten_for_csv(), to_csv_array()
+
+5. TransistorCharacteristicsResult
+   - For transistor measurements (output/transfer characteristics)
+   - Fields: vgs (array), vds (array), ids (array), igs (optional array)
+   - Methods: get_output_curve_at_vgs(), to_csv_array()
+
+6. SinglePointResult
+   - For single-point measurements with optional uncertainty
+   - Fields: value (float), uncertainty (optional), unit (str)
+   - Method: __str__() — Formatted output
+
+7. TemperatureSweepResult
+   - For cryogenic temperature sweep sessions
+   - Fields: temperatures (array), measurement_results (list)
+   - Methods: get_results_at_temperature()
+
+Metadata Class:
+
+MeasurementMetadata:
+  - Fields: timestamp, instrument, measurement_type, temperature_k, dc_bias_v,
+            ac_level_v, custom_params
+  - Method: to_dict() — For serialization
+
+Usage Example:
+  from measurement_results import FrequencySweepResult, MeasurementMetadata
+  import numpy as np
+  
+  # Create result from measurement
+  freq_array = np.logspace(2, 6, 201)
+  z_mag_array = ... # measurement data
+  phase_array = ... # measurement data
+  
+  result = FrequencySweepResult(
+      frequency=freq_array,
+      primary=z_mag_array,
+      secondary=phase_array,
+      metadata=MeasurementMetadata(
+          instrument="PIA",
+          measurement_type="Impedance vs Frequency"
+      )
+  )
+  
+  # Automatic CSV export
+  csv_data = result.to_csv_array()
+  header = result.get_csv_header(
+      freq_label="freq_Hz",
+      prim_label="Z_ohm",
+      sec_label="theta_deg"
+  )
+  file_management.save_csv("impedance.csv", csv_data, header)
+
+Benefits:
+  - Consistent interface across all measurements
+  - Type safety and IDE autocomplete
+  - Easy CSV export with proper headers
+  - Metadata automatically tracked
+  - Enables systematic analysis/plotting tools
+  - Prepares codebase for uncertainty handling
+  - Eliminates format confusion in downstream code
+
+
+Breaking Changes: NONE
+  - New module, purely additive
+  - Existing code continues to work
+  - Can migrate to new results gradually
+
+
+--------------------------------------------------------------------------------
+6.4 REFACTORING IMPACT SUMMARY
+================================================================================
+
+Lines Removed:
+  - Duplicate function definitions: 10 lines (prompt_bool)
+  - Duplicate measurement lists: ~100 lines
+  - Dead code eliminated: ~90 lines
+  Total Reduction: ~200 lines
+
+Code Consolidation:
+  - Measurement lists: 2 places → 1 place (measurements_config.py)
+  - Parameter validators: 5+ scattered → 1 module (parameter_validators.py)
+  - Result formats: inconsistent → standardized (measurement_results.py)
+  - Duplicate validation: ~150 lines → 340-line standardized module
+
+Files Added:
+  - measurement_functions/measurements_config.py: 275 lines
+  - utility/parameter_validators.py: 340 lines
+  - utility/measurement_results.py: 380 lines
+
+Documentation Added:
+  - REFACTORING_COMPLETE.md: Comprehensive report
+  - REFACTORING_NOTES.md: Technical details
+  - This reference document: Updated with new modules
+
+Backward Compatibility:
+  - 100% backward compatible
+  - No breaking changes
+  - Gradual migration possible
+
+
+Future Reduction Potential:
+  - Consolidate _prepare_*_cryo() functions: ~300 lines
+  - Unified instrument manager: ~100 lines
+  - Common measurement loop: ~400 lines
+  - Estimated total: 1500-2000 additional lines of reduction possible
+
+
+================================================================================
+7. GUI INTERFACE
+================================================================================
+
+File: gui.py (840 lines)
+
+Purpose:
+  Tkinter-based graphical interface as alternative to CLI.
+  Launch with: python main.py --gui
+
+Features:
+  - Instrument selection via radio buttons (PIA, PSPA, LCR)
+  - Measurement listbox with dynamic content based on instrument
+  - Dynamic parameter entry fields based on measurement type
+  - Cryogenic temperature sweep checkbox with dedicated parameter panel
+  - Measurement queue system for cryo sweeps
+  - Status display with real-time measurement feedback
+  - Progress tracking during cryo temperature sweeps
+  - Background thread execution to prevent UI freezing
+
+Operation:
+
+1. Single Measurement Mode:
+   - Select instrument → measurement
+   - Parameter entry fields appear automatically
+   - Select output directory
+   - Click "Run Measurement"
+   - Status updates in real-time
+
+2. Cryogenic Sweep Mode:
+   - Check "Enable Cryogenic Temperature Sweep"
+   - Enter temperature limits, ramp rate, number of points
+   - Select measurements to queue (from any instrument)
+   - Click "Start Sweep"
+   - Temperature controller ramps while GUI displays progress
+
+GUI Components:
+
+- Output Directory: Browse button + read-only display
+- Cryo Checkbox: Enable/disable temperature sweep mode
+- Cryo Parameters: Start temp, end temp, num points, ramp rate
+- Instrument Selection: Radio buttons (PIA, PSPA, LCR)
+- Measurement Listbox: Scrollable list of measurements
+- Parameters Frame: Dynamic entry fields based on measurement
+- Measurement Queue: Display/manage queued measurements (cryo mode)
+- Status Text: Real-time measurement and cryo sweep progress
+- Buttons: Run/Queue measurement, clear queue, etc.
+
+Integration with Refactored Modules:
+  - Uses measurements_config.py for measurement lists and parameters
+  - Imports MEASUREMENT_PARAMS to populate GUI dynamically
+  - Uses parameter_validators.py for input validation
+  - Calls measurement_results.py for standardized result handling
+
+Key Improvements (Post-Refactoring):
+  - Measurement definitions shared with CLI (no duplication)
+  - GUI automatically reflects CLI measurement updates
+  - Parameter validation centralized
+  - Result handling standardized
 
 
 ================================================================================

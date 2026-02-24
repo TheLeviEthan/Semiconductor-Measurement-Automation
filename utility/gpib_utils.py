@@ -172,16 +172,3 @@ def prompt_choice(label: str, options: list[str], default: str) -> str:
     log.warning("Invalid choice '%s', using default '%s'", raw, default)
     return default.upper()
 
-
-def prompt_bool(label: str, default: bool = False) -> bool:
-    """Prompt user for yes/no.
-
-    Example::
-
-        apply = prompt_bool("Apply DC bias?", False)
-    """
-    default_str = "y" if default else "n"
-    raw = input(f"{label} (y/n) [default {default_str}]: ").strip().lower()
-    if not raw:
-        return default
-    return raw == "y"
