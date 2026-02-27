@@ -13,7 +13,6 @@ import sys
 import os
 import logging
 import threading
-import numpy as np
 
 # Add directories to path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'utility'))
@@ -101,36 +100,28 @@ class MeasurementGUI:
         
         self.cryo_params_widgets = []
         
-        # Starting temperature
-        lbl = ttk.Label(cryo_params_frame, text="Start Temperature (K):")
+        # Ending temperature (target)
+        lbl = ttk.Label(cryo_params_frame, text="Target Temperature (K):")
         lbl.grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.cryo_temp_start = ttk.Entry(cryo_params_frame, width=15)
-        self.cryo_temp_start.insert(0, "10")
-        self.cryo_temp_start.grid(row=0, column=1, sticky=tk.W, padx=(10, 0), pady=2)
-        self.cryo_params_widgets.append(self.cryo_temp_start)
-        
-        # Ending temperature
-        lbl = ttk.Label(cryo_params_frame, text="End Temperature (K):")
-        lbl.grid(row=1, column=0, sticky=tk.W, pady=2)
         self.cryo_temp_end = ttk.Entry(cryo_params_frame, width=15)
-        self.cryo_temp_end.insert(0, "300")
-        self.cryo_temp_end.grid(row=1, column=1, sticky=tk.W, padx=(10, 0), pady=2)
+        self.cryo_temp_end.insert(0, "10")
+        self.cryo_temp_end.grid(row=0, column=1, sticky=tk.W, padx=(10, 0), pady=2)
         self.cryo_params_widgets.append(self.cryo_temp_end)
-        
-        # Number of temperature points
-        lbl = ttk.Label(cryo_params_frame, text="Number of Temperature Points:")
-        lbl.grid(row=2, column=0, sticky=tk.W, pady=2)
-        self.cryo_num_points = ttk.Entry(cryo_params_frame, width=15)
-        self.cryo_num_points.insert(0, "10")
-        self.cryo_num_points.grid(row=2, column=1, sticky=tk.W, padx=(10, 0), pady=2)
-        self.cryo_params_widgets.append(self.cryo_num_points)
-        
+
+        # Measurement interval
+        lbl = ttk.Label(cryo_params_frame, text="Measurement Interval (K):")
+        lbl.grid(row=1, column=0, sticky=tk.W, pady=2)
+        self.cryo_meas_interval = ttk.Entry(cryo_params_frame, width=15)
+        self.cryo_meas_interval.insert(0, "10")
+        self.cryo_meas_interval.grid(row=1, column=1, sticky=tk.W, padx=(10, 0), pady=2)
+        self.cryo_params_widgets.append(self.cryo_meas_interval)
+
         # Ramp rate
         lbl = ttk.Label(cryo_params_frame, text="Ramp Rate (K/min):")
-        lbl.grid(row=3, column=0, sticky=tk.W, pady=2)
+        lbl.grid(row=2, column=0, sticky=tk.W, pady=2)
         self.cryo_ramp_rate = ttk.Entry(cryo_params_frame, width=15)
         self.cryo_ramp_rate.insert(0, "5.0")
-        self.cryo_ramp_rate.grid(row=3, column=1, sticky=tk.W, padx=(10, 0), pady=2)
+        self.cryo_ramp_rate.grid(row=2, column=1, sticky=tk.W, padx=(10, 0), pady=2)
         self.cryo_params_widgets.append(self.cryo_ramp_rate)
         
         self.cryo_params_frame = cryo_params_frame
@@ -356,12 +347,13 @@ class MeasurementGUI:
             self.update_status("Cryo mode disabled - running single measurements")
 
     def queue_measurement(self):
-        """Queue the selected measurement for cryo sweep."""
+        """Queue the selected measurement (with current params) for cryo sweep."""
         try:
             instrument = self.instrument_var.get()
             measurement_idx, measurement_name = self.get_selected_measurement()
+            params = self.get_params_dict()  # Capture params at queue time
             
-            self.measurement_queue.append((instrument, measurement_idx, measurement_name))
+            self.measurement_queue.append((instrument, measurement_idx, measurement_name, params))
             self.queue_listbox.insert(tk.END, f"[{instrument}] {measurement_name}")
             self.update_status(f"Queued: [{instrument}] {measurement_name}")
         except ValueError as e:
@@ -385,32 +377,28 @@ class MeasurementGUI:
             return
         
         try:
+            import cryo
             # Get cryo parameters
-            temp_start = float(self.cryo_temp_start.get())
             temp_end = float(self.cryo_temp_end.get())
-            num_points = int(self.cryo_num_points.get())
+            meas_interval = float(self.cryo_meas_interval.get())
             ramp_rate = float(self.cryo_ramp_rate.get())
             
             # Validate
-            if num_points < 1:
-                raise ValueError("Number of temperature points must be >= 1")
+            if meas_interval <= 0:
+                raise ValueError("Measurement interval must be > 0")
             if ramp_rate <= 0:
                 raise ValueError("Ramp rate must be > 0")
-            if temp_start == temp_end and num_points > 1:
-                raise ValueError("Start and end temperatures must be different for multiple points")
-            
-            # Generate temperature points
-            if num_points == 1:
-                temp_points = [temp_start]
-            else:
-                temp_points = list(np.linspace(temp_start, temp_end, num_points))
+
+            if temp_end < cryo.TEMP_MIN_K or temp_end > cryo.TEMP_MAX_K:
+                raise ValueError("Target temperature is out of range")
             
             output_dir = self.output_dir_var.get()
             file_management.set_output_dir(output_dir)
             file_management.ensure_output_dir(output_dir)
             
-            self.update_status(f"Starting cryo sweep: {temp_start}K → {temp_end}K ({num_points} points)")
+            self.update_status(f"Starting cryo sweep: current temperature → {temp_end}K")
             self.update_status(f"Ramp rate: {ramp_rate} K/min")
+            self.update_status(f"Measurement interval: {meas_interval} K")
             self.update_status(f"Queued measurements: {len(self.measurement_queue)}")
             
             # Disable buttons during sweep
@@ -422,7 +410,7 @@ class MeasurementGUI:
             # Run sweep in background thread
             thread = threading.Thread(
                 target=self._run_cryo_sweep_thread,
-                args=(temp_points, ramp_rate)
+                args=(temp_end, meas_interval, ramp_rate)
             )
             thread.daemon = True
             thread.start()
@@ -436,18 +424,36 @@ class MeasurementGUI:
             self.clear_queue_btn.config(state='normal')
             self.progress_var.set(0)
 
-    def _run_cryo_sweep_thread(self, temp_points, ramp_rate):
+    def _run_cryo_sweep_thread(self, temp_end, meas_interval, ramp_rate):
         """Execute cryo sweep in background thread."""
+        def _restore_buttons():
+            self.queue_btn.config(state='normal')
+            self.start_sweep_btn.config(state='normal')
+            self.clear_queue_btn.config(state='normal')
+
         try:
             import cryo
-            # Import execute functions from main
-            from main import execute_pia_measurement, execute_pspa_measurement, execute_lcr_measurement
+            # Import execute functions from cli
+            from gui_measurements import execute_pia_gui, execute_pspa_gui, execute_lcr_gui
             
             self.update_status("Connecting to cryogenic controller...")
             cryocon = cryo.setup()
-            
+
+            start_temp = cryo.get_current_temperature(cryocon, loop=1)
+            if start_temp is None:
+                raise RuntimeError("Unable to read current temperature from controller")
+            if start_temp < temp_end - cryo.TEMP_TOLERANCE_K:
+                raise RuntimeError(
+                    f"Current temperature ({start_temp:.2f} K) is below target ({temp_end:.2f} K). "
+                    "Cryo sweep only supports ramping down."
+                )
+
+            temp_points = cryo.generate_temperature_sweep_points(start_temp, temp_end, meas_interval)
             n_temps = len(temp_points)
             n_meas = len(self.measurement_queue)
+
+            self.update_status(f"Temperature sweep: {temp_points[0]:.1f}K → {temp_points[-1]:.1f}K")
+            self.update_status(f"Temperature points: {n_temps}")
             
             for temp_idx, target_temp in enumerate(temp_points):
                 self.update_status(f"\n--- Temperature {temp_idx + 1}/{n_temps}: {target_temp:.2f}K ---")
@@ -481,22 +487,22 @@ class MeasurementGUI:
                     file_management.ensure_output_dir(temp_subdir)
                     
                     # Run queued measurements
-                    for m_idx, (instrument, meas_idx, meas_name) in enumerate(self.measurement_queue, 1):
+                    for m_idx, (instrument, meas_idx, meas_name, meas_params) in enumerate(self.measurement_queue, 1):
                         self.update_status(f"  [{m_idx}/{n_meas}] {meas_name}...")
                         try:
                             if instrument == "PIA":
-                                execute_pia_measurement(meas_idx)
+                                execute_pia_gui(meas_idx, meas_params)
                             elif instrument == "PSPA":
-                                execute_pspa_measurement(meas_idx)
+                                execute_pspa_gui(meas_idx, meas_params)
                             elif instrument == "LCR":
-                                execute_lcr_measurement(meas_idx)
+                                execute_lcr_gui(meas_idx, meas_params)
                             self.update_status(f"  [{m_idx}/{n_meas}] Complete")
                         except Exception as e:
                             log.error("Measurement failed: %s", e)
                             self.update_status(f"  [{m_idx}/{n_meas}] FAILED: {e}")
                     
                     progress = ((temp_idx + 1) / n_temps) * 100
-                    self.progress_var.set(progress)
+                    self.root.after(0, lambda p=progress: self.progress_var.set(p))
                 
                 except Exception as e:
                     log.error("Temperature point failed: %s", e)
@@ -510,17 +516,20 @@ class MeasurementGUI:
                 pass
             
             self.update_status("\n✓ Cryogenic sweep complete!")
-            self.progress_var.set(100)
+            self.root.after(0, lambda: self.progress_var.set(100))
             
         except Exception as e:
             log.error("Cryo sweep error: %s", e)
-            self.update_status(f"✗ Cryo sweep failed: {e}")
-            self.progress_var.set(0)
+            error_msg = str(e)
+            self.update_status(f"✗ Cryo sweep failed: {error_msg}")
+            self.root.after(0, lambda: [
+                self.progress_var.set(0),
+                messagebox.showerror("Cryo Sweep Error",
+                    f"Cryogenic sweep failed:\n\n{error_msg}")
+            ])
         finally:
-            # Re-enable buttons
-            self.queue_btn.config(state='normal')
-            self.start_sweep_btn.config(state='normal')
-            self.clear_queue_btn.config(state='normal')
+            # Re-enable buttons on main thread
+            self.root.after(0, _restore_buttons)
 
     def get_selected_measurement(self):
         """Get the selected measurement index and name."""
@@ -544,12 +553,14 @@ class MeasurementGUI:
         return params
 
     def update_status(self, message):
-        """Update the status text area."""
-        self.status_text.config(state='normal')
-        self.status_text.insert(tk.END, message + "\n")
-        self.status_text.see(tk.END)
-        self.status_text.config(state='disabled')
-        self.root.update()
+        """Update the status text area (thread-safe)."""
+        def _update():
+            self.status_text.config(state='normal')
+            self.status_text.insert(tk.END, message + "\n")
+            self.status_text.see(tk.END)
+            self.status_text.config(state='disabled')
+        # Schedule on main thread if called from a background thread
+        self.root.after(0, _update)
 
     def run_measurement(self):
         """Run the selected measurement in a separate thread."""
@@ -593,7 +604,7 @@ class MeasurementGUI:
             self.measurement_executor(instrument, measurement_idx, params)
             
             self.update_status(f"✓ Measurement completed: {measurement_name}")
-            self.progress_var.set(100)
+            self.root.after(0, lambda: self.progress_var.set(100))
             
             # Reset after a delay
             self.root.after(1000, lambda: [
@@ -603,19 +614,18 @@ class MeasurementGUI:
 
         except Exception as e:
             log.error("Measurement execution failed: %s", e)
-            self.update_status(f"✗ Error: {str(e)}")
-            self.run_btn.config(state='normal')
-            self.progress_var.set(0)
+            error_msg = str(e)
+            self.update_status(f"✗ Error: {error_msg}")
+            self.root.after(0, lambda: [
+                self.progress_var.set(0),
+                self.run_btn.config(state='normal'),
+                messagebox.showerror("Measurement Error",
+                    f"Measurement '{measurement_name}' failed:\n\n{error_msg}")
+            ])
 
 
 def run_gui_mode(measurement_executor):
     """Launch the GUI application."""
-    # Import the execute functions globally for cryo sweep support
-    global execute_pia_measurement, execute_pspa_measurement, execute_lcr_measurement
-    
-    # These are imported from main.py in the cryo sweep function
-    # For now, they're accessed via the measurement_executor callback
-    
     root = tk.Tk()
     gui = MeasurementGUI(root, measurement_executor)
     root.mainloop()

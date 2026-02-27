@@ -457,19 +457,18 @@ def wait_for_temperature(
         time.sleep(2)
 
 def generate_temperature_sweep_points(start_k, end_k, interval_k):
-    if end_k > start_k:
-        temps = np.arange(start_k, end_k + interval_k / 2, interval_k)
-        if len(temps) and temps[-1] > end_k:
-            temps = temps[:-1]
-        temps = np.append(temps, end_k)
-    else:
-        temps = np.arange(start_k, end_k - interval_k / 2, -interval_k)
-        if len(temps) and temps[-1] < end_k:
-            temps = temps[:-1]
-        temps = np.append(temps, end_k)
+    if interval_k <= 0:
+        raise ValueError("Measurement interval must be > 0 K")
 
-    temps = np.unique(np.sort(temps))
-    return temps
+    if end_k >= start_k:
+        temps = list(np.arange(start_k, end_k + interval_k / 2, interval_k))
+    else:
+        temps = list(np.arange(start_k, end_k - interval_k / 2, -interval_k))
+
+    if not temps or abs(temps[-1] - end_k) > 1e-6:
+        temps.append(end_k)
+
+    return np.array(temps, dtype=float)
 
 # =============================
 # Parameter Management
@@ -480,10 +479,6 @@ def get_cryogenic_parameters():
     print("CRYOGENIC MEASUREMENT PARAMETERS")
     print("=" * 60)
 
-    start_temp = safe_float_input(
-        f"Enter start temperature (K) [default {current_parameters['temp_start_k']}]: ",
-        current_parameters["temp_start_k"],
-    )
     end_temp = safe_float_input(
         f"Enter end temperature (K) [default {current_parameters['temp_end_k']}]: ",
         current_parameters["temp_end_k"],
@@ -497,9 +492,6 @@ def get_cryogenic_parameters():
         current_parameters["meas_interval_k"],
     )
 
-    if start_temp < TEMP_MIN_K or start_temp > TEMP_MAX_K:
-        log.warning(f"Start temperature {start_temp}K out of range; clipping")
-        start_temp = float(np.clip(start_temp, TEMP_MIN_K, TEMP_MAX_K))
     if end_temp < TEMP_MIN_K or end_temp > TEMP_MAX_K:
         log.warning(f"End temperature {end_temp}K out of range; clipping")
         end_temp = float(np.clip(end_temp, TEMP_MIN_K, TEMP_MAX_K))
@@ -510,25 +502,19 @@ def get_cryogenic_parameters():
         log.warning(f"Measurement interval {meas_interval}K too small; using {MEAS_INTERVAL_MIN_K}K")
         meas_interval = MEAS_INTERVAL_MIN_K
 
-    current_parameters["temp_start_k"] = start_temp
     current_parameters["temp_end_k"] = end_temp
     current_parameters["ramp_rate_k_per_min"] = ramp_rate
     current_parameters["meas_interval_k"] = meas_interval
     current_parameters["enable_cryo"] = True
 
-    temp_points = generate_temperature_sweep_points(start_temp, end_temp, meas_interval)
-
-    print(f"\nTemperature sweep: {start_temp:.1f}K → {end_temp:.1f}K at {ramp_rate:.2f}K/min")
+    print(f"\nTemperature sweep: current temperature → {end_temp:.1f}K at {ramp_rate:.2f}K/min")
     print(f"Measurement interval: {meas_interval:.1f}K")
-    print(f"Total measurement points: {len(temp_points)}")
-    print(f"Estimated ramp time: {abs(end_temp - start_temp) / ramp_rate:.1f} minutes\n")
+    print("Start temperature will be read from the controller at sweep start.\n")
 
     return {
-        "start_k": start_temp,
         "end_k": end_temp,
         "ramp_rate_k_per_min": ramp_rate,
         "meas_interval_k": meas_interval,
-        "temp_points": temp_points,
     }
 
 # =============================
