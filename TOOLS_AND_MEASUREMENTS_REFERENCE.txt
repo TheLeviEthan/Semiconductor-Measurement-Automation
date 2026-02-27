@@ -3,7 +3,7 @@ SEMICONDUCTOR MEASUREMENT AUTOMATION - TOOLS AND MEASUREMENTS REFERENCE
 ================================================================================
 Project: Semiconductor Measurement Automation
 Author: Ethan Ruddell
-Date: 2026-02-13
+Date: 2026-02-27
 
 
 ================================================================================
@@ -267,8 +267,8 @@ When CRYO is selected from the main menu:
 
 Control Loops:
   - Cryocon 32B has 2 control loops
-  - Current implementation uses Loop 1 (CH1)
-  - Loop 1 requires appropriate sensor type
+  - Current implementation uses Loop 2 (CH1)
+  - Loop 2 requires appropriate sensor type
 
 Temperature Ramp Behavior:
   - Actual ramp time depends on cooling system capacity
@@ -1354,12 +1354,12 @@ log_filename:  "measurement.log"  # Log file name
 --------------------------------------------------------------------------------
 
   Semiconductor-Measurement-Automation/
-  ├── main.py                         # CLI orchestration, measurement menus
-  ├── gui.py                          # Tkinter GUI interface (NEW - 2026)
+  ├── main.py                         # Thin entry point: GUI default, --cli flag (~69 lines)
+  ├── cli.py                          # Full CLI interface (~2137 lines, extracted from old main.py)
+  ├── gui.py                          # Tkinter GUI interface (~584 lines)
+  ├── gui_measurements.py             # Non-interactive GUI measurement execution (~709 lines)
   ├── config.yaml                     # User-editable defaults (GPIB, params)
   ├── TOOLS_AND_MEASUREMENTS_REFERENCE.txt
-  ├── REFACTORING_COMPLETE.md         # Refactoring report and metrics
-  ├── REFACTORING_NOTES.md            # Technical refactoring details (NEW)
   ├── README.md
   ├── measurement functions/
   │   ├── __init__.py
@@ -1367,7 +1367,7 @@ log_filename:  "measurement.log"  # Log file name
   │   ├── pspa.py                     # 4155C/4156C Parameter Analyzer (FLEX)
   │   ├── lcr.py                      # E4980A LCR Meter
   │   ├── cryo.py                     # Cryocon 32B Temperature Controller
-  │   └── measurements_config.py       # REFACTORED - Centralized measurement config (NEW)
+  │   └── measurements_config.py       # Centralized measurement config
   ├── utility/
   │   ├── __init__.py
   │   ├── gpib_utils.py               # InstrumentSession, input helpers, retry
@@ -1375,8 +1375,8 @@ log_filename:  "measurement.log"  # Log file name
   │   ├── config.py                   # YAML config loader
   │   ├── logging_config.py           # Centralized logging setup
   │   ├── find_instruments.py         # Standalone VISA resource discovery
-  │   ├── parameter_validators.py     # REFACTORED - Unified parameter validation (NEW)
-  │   ├── measurement_results.py      # REFACTORED - Standardized result classes (NEW)
+  │   ├── parameter_validators.py     # Unified parameter validation
+  │   ├── measurement_results.py      # Standardized result classes
   │   ├── test_4156c_commands.py      # PSPA command testing script
   │   └── test_pspa_commands.py       # PSPA integration test script
   └── LEGACY/                         # Old standalone scripts (not used)
@@ -1401,14 +1401,24 @@ Parameter Persistence:
   - Stores last-used settings for quick re-use across measurements
   - prompt_for_parameter_duplication() offers "use last params?" shortcut
 
-Measurement Flow:
+Measurement Flow (CLI):
   1. User selects instrument → measurement from CLI menu
-  2. Parameters are prompted (with defaults)
+  2. Parameters are prompted (with defaults via input())
   3. InstrumentSession opens connection
   4. Module-level function performs sweep/measurement
   5. Data saved to CSV via file_management.save_csv()
   6. Plot saved to images/ via file_management.save_plot() or save_image()
   7. InstrumentSession auto-disconnects on exit
+
+Measurement Flow (GUI):
+  1. User selects instrument and measurement from GUI dropdowns
+  2. Dynamic parameter entry fields are populated from measurements_config.py
+  3. User fills in parameters and clicks "Run Measurement"
+  4. gui_measurements.py executes measurement in a background thread
+     (calls instrument modules directly with params dict — no input() calls)
+  5. Data saved to CSV/images via file_management
+  6. Status updates are displayed via thread-safe root.after() callbacks
+  7. Error popups shown via messagebox.showerror() on failure
 
 Error Handling:
   - Each measurement choice wrapped in try/except
@@ -1420,11 +1430,37 @@ Error Handling:
 5.3 MODULE RESPONSIBILITIES
 --------------------------------------------------------------------------------
 
-main.py:
+main.py (~69 lines):
+  - Thin entry point for the application
+  - Parses --cli and --output-dir arguments
+  - GUI mode by default: imports gui.py and calls run_gui_mode()
+  - CLI mode via --cli flag: imports cli.py and calls cli_main()
+  - Bridges GUI to gui_measurements.py via gui_execute_measurement()
+
+cli.py (~2137 lines):
+  - Full interactive CLI interface (extracted from original main.py)
   - CLI menu system (instrument → measurement selection)
-  - Calls measurement module functions
+  - All execute_*_measurement() functions with interactive input() prompts
   - Handles plotting (matplotlib) and file saving
-  - Cryogenic temperature loop orchestration
+  - Cryogenic temperature loop orchestration (CLI mode)
+  - run_pia_measurements(), run_pspa_measurements(), run_lcr_measurements()
+  - _prepare_*_cryo() functions for pre-binding measurement params
+
+gui.py (~584 lines):
+  - Tkinter GUI layout, event handlers, and thread management
+  - MeasurementGUI class with instrument/measurement selection
+  - Dynamic parameter entry fields from measurements_config.py
+  - Cryogenic sweep mode with measurement queue
+  - Background thread execution with thread-safe widget updates
+  - Imports gui_measurements.py for non-interactive execution
+
+gui_measurements.py (~709 lines):
+  - Non-interactive measurement execution for the GUI
+  - execute_pia_gui(choice, params) — 10 PIA measurements
+  - execute_pspa_gui(choice, params) — 10 PSPA measurements
+  - execute_lcr_gui(choice, params) — 11 LCR measurements
+  - Takes params dict from GUI entry fields, calls instrument modules directly
+  - No input() calls — safe to call from background threads
 
 pia.py:
   - 4294A connection and initialization
@@ -1468,22 +1504,21 @@ file_management.py:
   - save_cycle_plot() — multi-cycle overlay plot
   - uniquify() — append (1), (2), etc. to prevent overwrites
 
-measurements_config.py: (REFACTORED - NEW, February 2026)
+measurements_config.py:
   - Centralized single source of truth for all measurements
   - PIA_MEASUREMENTS, PSPA_MEASUREMENTS, LCR_MEASUREMENTS lists
   - MEASUREMENT_PARAMS dictionary with all GUI parameter definitions
   - Helper functions: get_measurement_name(), get_measurements_list()
-  - Used by both main.py CLI and gui.py Tkinter interface
+  - Used by cli.py (CLI menus), gui.py (GUI dropdowns), and gui_measurements.py
 
-parameter_validators.py: (REFACTORED - NEW, February 2026)
+parameter_validators.py:
   - Consolidated parameter validation for all measurement types
   - Frequency, temperature, voltage, current, AC level validators
   - ParameterSet class for validating related parameters together
   - validate_measurement_params() for bulk validation
   - Automatic logging and value clipping
-  - Replaces scattered validation logic throughout codebase
 
-measurement_results.py: (REFACTORED - NEW, February 2026)
+measurement_results.py:
   - Standardized result classes for all measurement types
   - FrequencySweepResult, VoltageSweepResult, IVCurveResult
   - CycleResult for repeating cycles (butterflies)
@@ -1773,37 +1808,45 @@ Future Reduction Potential:
 7. GUI INTERFACE
 ================================================================================
 
-File: gui.py (840 lines)
+File: gui.py (~584 lines)
 
 Purpose:
-  Tkinter-based graphical interface as alternative to CLI.
-  Launch with: python main.py --gui
+  Tkinter-based graphical interface — the default launch mode.
+  Launch: python main.py          (GUI, default)
+          python main.py --cli    (CLI mode)
 
 Features:
   - Instrument selection via radio buttons (PIA, PSPA, LCR)
   - Measurement listbox with dynamic content based on instrument
   - Dynamic parameter entry fields based on measurement type
   - Cryogenic temperature sweep checkbox with dedicated parameter panel
-  - Measurement queue system for cryo sweeps
+  - Measurement queue system for cryo sweeps (params captured at queue time)
   - Status display with real-time measurement feedback
   - Progress tracking during cryo temperature sweeps
   - Background thread execution to prevent UI freezing
+  - Thread-safe widget updates via root.after() callbacks
+  - Error popup dialogs (messagebox.showerror) on failure
 
 Operation:
 
 1. Single Measurement Mode:
    - Select instrument → measurement
-   - Parameter entry fields appear automatically
+   - Parameter entry fields appear automatically (from measurements_config.py)
    - Select output directory
    - Click "Run Measurement"
-   - Status updates in real-time
+   - Measurement runs in a daemon background thread
+   - gui_measurements.py handles non-interactive execution
+   - Status updates displayed in real-time via thread-safe callbacks
+   - Error popup shown on failure; progress resets on completion
 
 2. Cryogenic Sweep Mode:
    - Check "Enable Cryogenic Temperature Sweep"
    - Enter temperature limits, ramp rate, number of points
    - Select measurements to queue (from any instrument)
+   - Params are captured at queue time (not at sweep time)
    - Click "Start Sweep"
    - Temperature controller ramps while GUI displays progress
+   - gui_measurements.py executes each queued measurement non-interactively
 
 GUI Components:
 
@@ -1817,17 +1860,19 @@ GUI Components:
 - Status Text: Real-time measurement and cryo sweep progress
 - Buttons: Run/Queue measurement, clear queue, etc.
 
-Integration with Refactored Modules:
-  - Uses measurements_config.py for measurement lists and parameters
-  - Imports MEASUREMENT_PARAMS to populate GUI dynamically
-  - Uses parameter_validators.py for input validation
-  - Calls measurement_results.py for standardized result handling
+Thread Safety:
+  - All widget updates from background threads use root.after(0, callback)
+  - update_status() schedules text insertion on the main thread
+  - Progress bar, button state changes, and error dialogs all dispatched via root.after()
+  - gui_measurements.py uses matplotlib "Agg" backend (non-interactive) for thread safety
 
-Key Improvements (Post-Refactoring):
-  - Measurement definitions shared with CLI (no duplication)
-  - GUI automatically reflects CLI measurement updates
-  - Parameter validation centralized
-  - Result handling standardized
+Integration:
+  - gui.py: UI layout, event handlers, thread management
+  - gui_measurements.py: Non-interactive measurement execution (no input() calls)
+  - measurements_config.py: Measurement lists and parameter definitions
+  - main.py: Entry point, bridges GUI to gui_measurements.py via gui_execute_measurement()
+  - Measurement definitions shared with CLI via measurements_config.py (no duplication)
+  - GUI automatically reflects measurement config updates
 
 
 ================================================================================
