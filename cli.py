@@ -753,11 +753,12 @@ def _prepare_pspa_cryo(choice):
         v_stop = safe_float_input("Enter stop voltage (V) [default 5]: ", 5)
         v_step = safe_float_input("Enter voltage step (V) [default 0.1]: ", 0.1)
         compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
-        channel = safe_int_input("Enter channel number [default 1]: ", 1)
+        channel = safe_int_input("Enter force channel number [default 1]: ", 1)
+        ground_ch = safe_int_input("Enter ground channel number [default 2]: ", 2)
 
         def run():
             with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
-                data = pspa.measure_iv_curve(inst, v_start, v_stop, v_step, channel, compliance)
+                data = pspa.measure_iv_curve(inst, v_start, v_stop, v_step, channel, compliance, ground_ch)
                 file_management.save_csv("iv_curve.csv",
                     np.column_stack([data['Voltage'], data['Current']]),
                     "Voltage_V, Current_A")
@@ -774,11 +775,12 @@ def _prepare_pspa_cryo(choice):
         v_max = safe_float_input("Enter maximum voltage magnitude (V) [default 5]: ", 5)
         v_step = safe_float_input("Enter voltage step (V) [default 0.1]: ", 0.1)
         compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
-        channel = safe_int_input("Enter channel number [default 1]: ", 1)
+        channel = safe_int_input("Enter force channel number [default 1]: ", 1)
+        ground_ch = safe_int_input("Enter ground channel number [default 2]: ", 2)
 
         def run():
             with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
-                data = pspa.measure_iv_bidirectional(inst, v_max, v_step, channel, compliance)
+                data = pspa.measure_iv_bidirectional(inst, v_max, v_step, channel, compliance, ground_ch)
                 file_management.save_csv("iv_curve_bidirectional.csv",
                     np.column_stack([data['Voltage'], data['Current']]),
                     "Voltage_V, Current_A")
@@ -937,12 +939,13 @@ def _prepare_pspa_cryo(choice):
         i_stop = safe_float_input("Enter stop current (A) [default 1e-3]: ", 1e-3)
         i_step = safe_float_input("Enter current step (A) [default 1e-4]: ", 1e-4)
         compliance = safe_float_input("Enter voltage compliance (V) [default 10.0]: ", 10.0)
-        channel = safe_int_input("Enter channel number [default 1]: ", 1)
+        force_ch = safe_int_input("Enter force channel number [default 1]: ", 1)
+        sense_ch = safe_int_input("Enter sense channel number [default 2]: ", 2)
 
         def run():
             with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
                 data = pspa.measure_resistance(
-                    inst, i_start, i_stop, i_step, channel, compliance)
+                    inst, i_start, i_stop, i_step, force_ch, sense_ch, compliance)
                 file_management.save_csv("resistance.csv",
                     np.column_stack([data['Current'], data['Voltage']]),
                     "Current_A, Voltage_V")
@@ -1667,12 +1670,13 @@ def execute_pspa_measurement(choice):
             v_stop = safe_float_input("Enter stop voltage (V) [default 5]: ", 5)
             v_step = safe_float_input("Enter voltage step (V) [default 0.1]: ", 0.1)
             compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
-            channel = safe_int_input("Enter channel number [default 1]: ", 1)
+            channel = safe_int_input("Enter force channel number [default 1]: ", 1)
+            ground_ch = safe_int_input("Enter ground channel number [default 2]: ", 2)
             
             try:
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
                     print("\nRunning I-V measurement...")
-                    data = pspa.measure_iv_curve(pspa_inst, v_start, v_stop, v_step, channel, compliance)
+                    data = pspa.measure_iv_curve(pspa_inst, v_start, v_stop, v_step, channel, compliance, ground_ch)
 
                     csv_data = np.column_stack([data['Voltage'], data['Current']])
                     file_management.save_csv("iv_curve.csv", csv_data, "Voltage_V, Current_A")
@@ -1699,12 +1703,13 @@ def execute_pspa_measurement(choice):
             v_max = safe_float_input("Enter maximum voltage magnitude (V) [default 5]: ", 5)
             v_step = safe_float_input("Enter voltage step (V) [default 0.1]: ", 0.1)
             compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
-            channel = safe_int_input("Enter channel number [default 1]: ", 1)
+            channel = safe_int_input("Enter force channel number [default 1]: ", 1)
+            ground_ch = safe_int_input("Enter ground channel number [default 2]: ", 2)
             
             try:
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
                     print("\nRunning bidirectional I-V measurement...")
-                    data = pspa.measure_iv_bidirectional(pspa_inst, v_max, v_step, channel, compliance)
+                    data = pspa.measure_iv_bidirectional(pspa_inst, v_max, v_step, channel, compliance, ground_ch)
 
                     csv_data = np.column_stack([data['Voltage'], data['Current']])
                     file_management.save_csv("iv_curve_bidirectional.csv", csv_data, "Voltage_V, Current_A")
@@ -1938,19 +1943,20 @@ def execute_pspa_measurement(choice):
 
         elif choice == 10:
             # Resistance Measurement
-            print("PSPA: Resistance Measurement (force I, measure V)")
+            print("PSPA: Resistance Measurement (Kelvin two-SMU: force I, measure V)")
 
             i_start = safe_float_input("Enter start current (A) [default 0]: ", 0)
             i_stop = safe_float_input("Enter stop current (A) [default 1e-3]: ", 1e-3)
             i_step = safe_float_input("Enter current step (A) [default 1e-4]: ", 1e-4)
             compliance = safe_float_input("Enter voltage compliance (V) [default 10.0]: ", 10.0)
-            channel = safe_int_input("Enter channel number [default 1]: ", 1)
+            force_ch = safe_int_input("Enter force channel number [default 1]: ", 1)
+            sense_ch = safe_int_input("Enter sense channel number [default 2]: ", 2)
 
             try:
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
                     print("\nRunning resistance measurement...")
                     data = pspa.measure_resistance(
-                        pspa_inst, i_start, i_stop, i_step, channel, compliance
+                        pspa_inst, i_start, i_stop, i_step, force_ch, sense_ch, compliance
                     )
 
                     csv_data = np.column_stack([data['Current'], data['Voltage']])
