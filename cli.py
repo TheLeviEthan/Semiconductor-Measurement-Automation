@@ -690,16 +690,23 @@ def _prepare_pspa_cryo(choice):
                 data = pspa.measure_transistor_transfer_characteristics(
                     inst, vgs_start, vgs_stop, vgs_step, vds_constant,
                     drain_ch, gate_ch, source_ch, compliance)
+                # Map direction labels to numeric column for CSV
+                dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
                 file_management.save_csv("transistor_transfer_chars.csv",
-                    np.column_stack([data['Vgs'], data['Id'], data['Ig']]),
-                    "Vgs_V, Id_A, Ig_A")
+                    np.column_stack([data['Vgs'], data['Id'], data['Ig'], dir_numeric]),
+                    "Vgs_V, Id_A, Ig_A, Sweep_Dir_0fwd_1rev")
+                fwd = data['Sweep_Direction'] == 'forward'
+                rev = data['Sweep_Direction'] == 'reverse'
                 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
-                ax1.plot(data['Vgs'], data['Id'] * 1e3, marker='o', label='Id')
+                ax1.plot(data['Vgs'][fwd], data['Id'][fwd] * 1e3, marker='o', label='Id (fwd)')
+                ax1.plot(data['Vgs'][rev], data['Id'][rev] * 1e3, marker='s', label='Id (rev)')
                 ax1.set_xlabel('Vgs (V)'); ax1.set_ylabel('Id (mA)')
                 ax1.set_title(f'Transfer Chars (Vds = {vds_constant} V) - Linear')
                 ax1.grid(True); ax1.legend()
-                ax2.semilogy(data['Vgs'], np.abs(data['Id']), marker='o', label='|Id|')
-                ax2.semilogy(data['Vgs'], np.abs(data['Ig']), marker='s', label='|Ig|')
+                ax2.semilogy(data['Vgs'][fwd], np.abs(data['Id'][fwd]), marker='o', label='|Id| (fwd)')
+                ax2.semilogy(data['Vgs'][rev], np.abs(data['Id'][rev]), marker='s', label='|Id| (rev)')
+                ax2.semilogy(data['Vgs'][fwd], np.abs(data['Ig'][fwd]), marker='^', label='|Ig| (fwd)')
+                ax2.semilogy(data['Vgs'][rev], np.abs(data['Ig'][rev]), marker='v', label='|Ig| (rev)')
                 ax2.set_xlabel('Vgs (V)'); ax2.set_ylabel('Current (A)')
                 ax2.set_title(f'Transfer Chars (Vds = {vds_constant} V) - Log')
                 ax2.grid(True); ax2.legend()
@@ -1571,19 +1578,26 @@ def execute_pspa_measurement(choice):
                         drain_ch, gate_ch, source_ch, compliance
                     )
 
-                    csv_data = np.column_stack([data['Vgs'], data['Id'], data['Ig']])
-                    file_management.save_csv("transistor_transfer_chars.csv", csv_data, "Vgs_V, Id_A, Ig_A")
+                    dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
+                    csv_data = np.column_stack([data['Vgs'], data['Id'], data['Ig'], dir_numeric])
+                    file_management.save_csv("transistor_transfer_chars.csv", csv_data, "Vgs_V, Id_A, Ig_A, Sweep_Dir_0fwd_1rev")
+
+                    fwd = data['Sweep_Direction'] == 'forward'
+                    rev = data['Sweep_Direction'] == 'reverse'
 
                     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
-                    ax1.plot(data['Vgs'], data['Id'] * 1e3, marker='o', label='Id')
+                    ax1.plot(data['Vgs'][fwd], data['Id'][fwd] * 1e3, marker='o', label='Id (fwd)')
+                    ax1.plot(data['Vgs'][rev], data['Id'][rev] * 1e3, marker='s', label='Id (rev)')
                     ax1.set_xlabel('Vgs (V)')
                     ax1.set_ylabel('Id (mA)')
                     ax1.set_title(f'Transfer Characteristics (Vds = {vds_constant} V) - Linear')
                     ax1.grid(True)
                     ax1.legend()
 
-                    ax2.semilogy(data['Vgs'], np.abs(data['Id']), marker='o', label='|Id|')
-                    ax2.semilogy(data['Vgs'], np.abs(data['Ig']), marker='s', label='|Ig|')
+                    ax2.semilogy(data['Vgs'][fwd], np.abs(data['Id'][fwd]), marker='o', label='|Id| (fwd)')
+                    ax2.semilogy(data['Vgs'][rev], np.abs(data['Id'][rev]), marker='s', label='|Id| (rev)')
+                    ax2.semilogy(data['Vgs'][fwd], np.abs(data['Ig'][fwd]), marker='^', label='|Ig| (fwd)')
+                    ax2.semilogy(data['Vgs'][rev], np.abs(data['Ig'][rev]), marker='v', label='|Ig| (rev)')
                     ax2.set_xlabel('Vgs (V)')
                     ax2.set_ylabel('Current (A)')
                     ax2.set_title(f'Transfer Characteristics (Vds = {vds_constant} V) - Log')

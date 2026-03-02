@@ -6,6 +6,9 @@ Description: Entry point for the NRG Semiconductor Measurement Automation.
 Launches the GUI by default. Pass --cli to use the command-line interface.
 """
 
+
+
+# TODO: add check to confirm measurements before proceding, DO YOU KNOW WHAT YOU'RE DOING
 import os
 import sys
 import argparse

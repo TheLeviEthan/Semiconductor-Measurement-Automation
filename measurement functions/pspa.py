@@ -291,42 +291,68 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
                                                  vds_constant,
                                                  drain_ch=1, gate_ch=2, source_ch=3,
                                                  compliance=0.1):
-    # Used to plot output current for sweep input voltage
+    """
+    Bidirectional Vgs sweep for transfer characteristics.
+    Sweeps Vgs from vgs_start -> vgs_stop (forward), then vgs_stop -> vgs_start
+    (reverse) to capture switching hysteresis.
 
-    # TODO: say which SMU is being used, bidirectional sweep
+    Returns dict with 'Vgs', 'Id', 'Ig', and 'Sweep_Direction' arrays.
+    'Sweep_Direction' contains 'forward' or 'reverse' for each data point.
+    """
+    print(f"SMU assignment — Drain: CH{drain_ch}, Gate: CH{gate_ch}, Source: CH{source_ch}")
+
     configure_smu(pspa, drain_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, gate_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, source_ch, mode='VOLT', compliance=compliance)
-    
+
     set_voltage(pspa, source_ch, 0)
     set_voltage(pspa, drain_ch, vds_constant)
-    
+
     pspa.write(f"CN {drain_ch},{gate_ch},{source_ch}")
-    
+
     vgs_array = []
     id_array = []
     ig_array = []
-    
-    vgs_values = sweep_values(vgs_start, vgs_stop, vgs_step)
-    
-    print("Starting Transfer Characteristics Sweep...")
-    
-    for vgs in vgs_values:
+    direction_array = []
+
+    # Forward sweep: vgs_start -> vgs_stop
+    forward_values = sweep_values(vgs_start, vgs_stop, vgs_step)
+    # Reverse sweep: vgs_stop -> vgs_start (step sign flipped)
+    reverse_values = sweep_values(vgs_stop, vgs_start, -vgs_step)
+
+    print("Starting Bidirectional Transfer Characteristics Sweep...")
+
+    print(f"  Forward sweep: {vgs_start} V -> {vgs_stop} V")
+    for vgs in forward_values:
         set_voltage(pspa, gate_ch, vgs)
-        
+
         id_val = measure_channel_current(pspa, drain_ch)
         ig_val = measure_channel_current(pspa, gate_ch)
-        
+
         vgs_array.append(vgs)
         id_array.append(id_val)
         ig_array.append(ig_val)
-    
+        direction_array.append('forward')
+
+    print(f"  Reverse sweep: {vgs_stop} V -> {vgs_start} V")
+    for vgs in reverse_values:
+        set_voltage(pspa, gate_ch, vgs)
+
+        id_val = measure_channel_current(pspa, drain_ch)
+        ig_val = measure_channel_current(pspa, gate_ch)
+
+        vgs_array.append(vgs)
+        id_array.append(id_val)
+        ig_array.append(ig_val)
+        direction_array.append('reverse')
+
     pspa.write("CL")
-    
+
     return {
         'Vgs': np.array(vgs_array),
         'Id': np.array(id_array),
-        'Ig': np.array(ig_array)
+        'Ig': np.array(ig_array),
+        'Sweep_Direction': np.array(direction_array)
     }
 
 # =============================
@@ -406,7 +432,6 @@ def measure_pulsed_iv(pspa, v_base, v_pulse, pulse_width, pulse_period, num_puls
                       channel=1, compliance=0.1):
     """
     Measure pulsed IV using '1 Channel Pulsed Spot Measurement' mode (MM 3).
-    [cite: 1338, 1346]
     """
     # Validate inputs
     validate_channel(channel)
