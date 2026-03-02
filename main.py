@@ -3,7 +3,20 @@ Filename: main.py
 Author: Ethan Ruddell
 Date: 2026-2-27
 Description: Entry point for the NRG Semiconductor Measurement Automation.
-Launches the GUI by default. Pass --cli to use the command-line interface.
+
+This is the file you run to start the software:
+    python main.py            → launches the graphical user interface (GUI)
+    python main.py --cli      → launches the command-line interface (CLI)
+    python main.py -o <dir>   → set a custom output directory for data files
+
+The GUI is the default because it is easier for day-to-day use.  The CLI
+is available for scripting, remote sessions, or when a graphical display
+is not available.
+
+This file is intentionally very short.  All it does is:
+  1. Parse command-line arguments (--cli, --output-dir).
+  2. Set up the logging system.
+  3. Hand off control to gui.py (GUI mode) or cli.py (CLI mode).
 """
 
 
@@ -14,7 +27,8 @@ import sys
 import argparse
 import logging
 
-# Add directories to path
+# Add the 'utility' and 'measurement functions' folders to Python's search
+# path so that "import file_management" (etc.) works without package prefixes.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'utility'))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'measurement functions'))
 

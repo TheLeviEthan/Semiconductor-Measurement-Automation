@@ -3,7 +3,25 @@ Filename: measurement_results.py
 Author: Ethan Ruddell
 Date: 2026-02-13
 Description: Standardized result classes for different measurement types.
-             Provides consistent interface for all measurements across instruments.
+
+After a measurement finishes, the raw data (arrays of numbers) needs to be
+packaged up so the rest of the code can work with it consistently.  This
+module defines a set of simple data containers ("dataclasses") — one for
+each family of measurement:
+
+  FrequencySweepResult    – impedance, capacitance, etc. vs frequency
+  VoltageSweepResult      – C-V, I-V at a single frequency
+  IVCurveResult           – current-voltage curves (with optional R calc)
+  CycleResult             – repeated loops like C-V butterfly measurements
+  TransistorCharacteristicsResult  – Id vs Vds / Vgs
+  SinglePointResult       – one measured value with optional uncertainty
+  TemperatureSweepResult  – a whole set of measurements at different temperatures
+
+Each result knows how to convert itself to a CSV-friendly array via
+`to_csv_array()`, so saving data is just one line of code.
+
+Metadata (timestamp, instrument name, temperature, etc.) is tracked
+automatically by the MeasurementMetadata class attached to each result.
 """
 
 from dataclasses import dataclass, field

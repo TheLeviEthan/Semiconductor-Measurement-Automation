@@ -2,7 +2,30 @@
 Filename: pia.py
 Author: Ethan Ruddell
 Date: 2025-01-23
-Description: Contains all constants and functions for PIA measurements.
+Description: Driver for the Agilent 4294A Precision Impedance Analyzer (PIA).
+
+The 4294A measures how a device (capacitor, dielectric film, etc.) responds to
+an AC signal across a range of frequencies or DC bias voltages.  It can report
+many different quantities:
+  - Cp and D  (parallel capacitance and dissipation factor)
+  - |Z| and θ (impedance magnitude and phase angle)
+  - R and X   (resistance and reactance)
+  - G and B   (conductance and susceptance)
+  - |Y| and θ (admittance magnitude and phase angle)
+  - εr        (relative permittivity / dielectric constant)
+
+Communication uses plain GPIB commands (not SCPI).  The most important ones:
+  - MEAS CPD / ZTD / RX / GB / YTD  – select measurement mode
+  - SWPP FREQ / DCB                 – sweep frequency or DC bias
+  - SING                             – start a single sweep
+  - OUTPSWPRM? / OUTPDTRC?          – read back the data
+
+Typical workflow:
+  1. connect_4294a()              – open a GPIB session
+  2. initialize_4294a_for_*()     – reset, pick mode, set oscillator level
+  3. configure_dc_bias()          – optionally apply a DC bias
+  4. measure_*_vs_freq()          – run the sweep and read data
+  5. close the session (handled by InstrumentSession in the caller)
 """
 
 import pyvisa
@@ -14,22 +37,26 @@ log = logging.getLogger(__name__)
 # =============================
 # User settings and constants
 # =============================
+# These defaults are used when a measurement function is called without
+# explicit parameters.  They can be overridden at runtime.
 GPIB_ADDRESS = "GPIB0::24::INSTR"   # GPIB address for PIA
 
 # Default Frequency sweep settings (LOG sweep)
-FREQ_START_HZ = 4e1      # start frequency, Hz (>0 for LOG sweep)
-FREQ_STOP_HZ = 5e6       # stop frequency, Hz
-NUM_POINTS = 201         # number of points in LOG sweep
+FREQ_START_HZ = 4e1      # start frequency, Hz (must be >0 for LOG sweep)
+FREQ_STOP_HZ = 5e6       # stop frequency, Hz (5 MHz, near 4294A max)
+NUM_POINTS = 201         # number of data points across the sweep
 
 # Default DC bias options
+# DC bias applies a constant voltage to the DUT during the AC measurement,
+# which is needed for C-V (capacitance vs voltage) measurements.
 APPLY_DC_BIAS = True     # True = apply a fixed DC bias; False = no DC bias
-DC_BIAS_V = 0         # bias voltage (V) if APPLY_DC_BIAS = True
+DC_BIAS_V = 0            # bias voltage (V) if APPLY_DC_BIAS = True
 
 # =============================
 # Measurement Parameters
 # =============================
-# This dictionary stores the current measurement parameters
-# allowing for duplication across measurement types
+# This dictionary stores the parameters from the most recent measurement
+# so the CLI can offer a "use last parameters?" shortcut.
 current_parameters = {
     "freq_start_hz": FREQ_START_HZ,
     "freq_stop_hz": FREQ_STOP_HZ,
@@ -42,6 +69,9 @@ current_parameters = {
 # =============================
 # Setup Functions
 # =============================
+# Functions to connect to the instrument and configure it for a specific
+# measurement mode.  The 4294A is configured by sending plain text commands
+# over the GPIB bus.
 def connect_4294a(resource_name=GPIB_ADDRESS):
     """Open VISA session to Agilent 4294A."""
     rm = pyvisa.ResourceManager()
@@ -246,6 +276,9 @@ def setup():
 # =============================
 # Parameter Configuration and Duplication
 # =============================
+# These helpers support the CLI's "use last measurement parameters?" feature.
+# When the user says yes, the software re-uses the values from
+# current_parameters instead of prompting for new ones.
 
 def get_frequency_parameters(use_last=None, freq_start=None, freq_stop=None, num_points=None):
     """
@@ -335,6 +368,10 @@ def prompt_for_parameter_duplication():
 # =============================
 # Dielectric C–V Measurement Helpers
 # =============================
+# C-V (Capacitance vs Voltage) measurements sweep a DC bias across the DUT
+# at a fixed AC frequency and measure how capacitance changes.  A "butterfly"
+# cycle sweeps up then down to reveal hysteresis (memory effects).
+# These are essential for characterising ferroelectric thin films (e.g. HZO).
 
 def set_dc_bias_sweep(inst, v_start, v_stop, n_points, direction="UP"):
     """
@@ -428,6 +465,8 @@ def measure_eps_vs_freq(inst, freq_start, freq_stop, freq_points, bias_voltage=0
 # =============================
 # Additional Measurement Modes
 # =============================
+# R-X, G-B, and Y-θ are alternative ways of expressing impedance data.
+# They all use the same generic two-trace sweep under the hood.
 
 
 def _measure_two_trace_vs_freq(inst, freq_start=None, freq_stop=None, num_points=None):

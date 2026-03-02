@@ -1,9 +1,32 @@
 """
 Filename: pspa.py
 Author: Ethan Ruddell
-Date: 2025-01-23
-Description: Contains all constants and functions for PSPA measurements.
-             Updated for Agilent 4155C/4156C FLEX Syntax.
+Date: 2025-03-02
+Description: Driver for the Agilent 4155C / 4156C Semiconductor Parameter Analyzer.
+
+The 4155C/4156C has up to four SMU (Source/Measure Unit) channels.  Each SMU
+can force a voltage and measure current, or force a current and measure
+voltage.  This makes it ideal for I-V curves, transistor characterisation,
+diode testing, breakdown measurements, and more.
+
+IMPORTANT: This module uses the FLEX command set, NOT SCPI.
+FLEX (also called the "US" command mode) is the older native language of
+the instrument.  Key commands:
+  US       – switch the instrument into FLEX mode
+  FMT 1    – set output format to ASCII with header
+  CN / CL  – enable / disable SMU channels
+  DV / DI  – force DC voltage / current
+  TI? / TV? – measure current / voltage (high-speed spot)
+  PV       – set pulse voltage parameters
+  MM       – select measurement mode (spot, sweep, pulsed, etc.)
+  XE       – execute measurement
+  RMD?     – read measurement data
+
+Typical workflow:
+  1. connect_pspa()             – open GPIB session, enter FLEX mode
+  2. configure_smu()            – set each channel as voltage or current source
+  3. measure_*()                – perform the desired measurement (sweep / pulse)
+  4. disconnect_pspa()          – disable outputs, return to SCPI, close session
 """
 
 import pyvisa
@@ -17,18 +40,22 @@ log = logging.getLogger(__name__)
 # =============================
 # User settings and constants
 # =============================
-GPIB_ADDRESS = "GPIB0::16::INSTR"   # Example: "GPIB0::17::INSTR"
+GPIB_ADDRESS = "GPIB0::16::INSTR"   # Default GPIB address for the PSPA
 
-# Global state to track SMU configuration (compliance, mode)
-# Keys: Channel int (1-4), Values: {'mode': 'VOLT', 'compliance': 0.1, 'range': 0}
+# Global state to track how each SMU channel is configured.
+# Keys: Channel number (1-4)
+# Values: dict with 'mode' (VOLT or CURR), 'compliance' (safety limit), 'range' (0=auto).
 SMU_CONFIG = {}
 
-# Global state for pulse configuration
+# Global state for pulse timing configuration.
+# Keys: 'width' (float, seconds), 'period' (float, seconds), 'hold' (float, seconds).
 PULSE_CONFIG = {}
 
 # =============================
 # Connection and Initialization
 # =============================
+# FLEX mode replies embed status letters before the number (e.g. '128AI+5.33E-11').
+# The regex below extracts the numeric part from any FLEX reply string.
 
 _NUM_RE = re.compile(r'([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)')
 
@@ -74,7 +101,7 @@ def connect_pspa(gpib_address=None):
         # Clear interface
         pspa.clear()
         
-        # Initialize 4155C/4156C into FLEX mode [cite: 1290, 1690]
+        # Initialize 4155C/4156C into FLEX mode
         # US: User Switch (switches to FLEX command set)
         pspa.write("US")
         
@@ -93,7 +120,7 @@ def connect_pspa(gpib_address=None):
 
 def check_errors(pspa):
     """Check for instrument errors using standard SCPI command (valid in FLEX)."""
-    # Note: :SYST:ERR? is one of the few SCPI commands valid in FLEX [cite: 1711]
+    # Note: :SYST:ERR? is one of the few SCPI commands valid in FLEX 
     errors = []
     try:
         err_query = pspa.query(":SYST:ERR?")
@@ -109,7 +136,7 @@ def disconnect_pspa(pspa):
     try:
         # Disable all channels 
         pspa.write("CL")
-        # Return to SCPI mode (Page mode) [cite: 1316]
+        # Return to SCPI mode (Page mode)
         pspa.write(":PAGE")
     except Exception:
         pass
@@ -133,6 +160,8 @@ def measure_channel_current(pspa, channel):
 # =============================
 # Source Configuration Functions
 # =============================
+# These functions set up what each SMU channel does (force voltage or
+# force current) and at what safety limit (compliance).
 
 def configure_smu(pspa, channel, mode='VOLT', compliance=0.1):
     """
@@ -193,6 +222,7 @@ def output_off(pspa, channel):
 # =============================
 # Helper Functions
 # =============================
+# Basic sanity checks and a sweep-value generator used by all measurements.
 
 def validate_channel(channel):
     """Validate channel number is within valid range (1-4 for 4156C)."""
@@ -232,6 +262,10 @@ def sweep_values(start: float, stop: float, step: float) -> np.ndarray:
 # =============================
 # Transistor I-V Measurements
 # =============================
+# The two standard transistor characterisations:
+#   Output characteristics  – sweep drain voltage (Vds) at several gate voltages (Vgs)
+#   Transfer characteristics – sweep gate voltage (bidirectional) at fixed drain voltage
+# Both require three SMU channels: drain, gate, and source (grounded).
 
 def measure_transistor_output_characteristics(pspa, vds_start, vds_stop, vds_step, 
                                                vgs_start, vgs_stop, vgs_step,
@@ -358,6 +392,9 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
 # =============================
 # General I-V Measurements
 # =============================
+# Single-channel voltage sweeps for generic two-terminal devices.
+#   Unidirectional: 0 → V_max  (simple ramp)
+#   Bidirectional:  0 → +V_max → -V_max → 0  (detects hysteresis)
 
 def measure_iv_curve(pspa, v_start, v_stop, v_step, channel=1, compliance=0.1):
     # Validate inputs
@@ -413,6 +450,10 @@ def measure_iv_bidirectional(pspa, v_max, v_step, channel=1, compliance=0.1):
 # =============================
 # Pulse Measurements
 # =============================
+# Pulsed measurements apply voltage in short bursts instead of continuously.
+# This reduces self-heating in the device under test, giving more accurate
+# results for high-power transistors and other heat-sensitive devices.
+# The 4155C/4156C FLEX mode supports pulsed spot measurements (MM 3).
 
 def configure_pulse_mode(pspa, channel, pulse_width, pulse_period):
     """
@@ -576,6 +617,8 @@ def measure_pulsed_transistor(pspa, vds_pulse, vgs_pulse, vds_base, vgs_base,
 # =============================
 # Additional Measurement Functions
 # =============================
+# Specialised measurements for diodes, gate leakage, breakdown voltage,
+# and resistance (force-I / measure-V).
 
 def measure_diode_iv(pspa, v_start, v_stop, v_step, anode_ch=1, cathode_ch=2,
                      compliance=0.1):

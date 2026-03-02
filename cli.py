@@ -2,9 +2,35 @@
 Filename: cli.py
 Author: Ethan Ruddell
 Date: 2026-2-27
-Description: CLI interface for automating semiconductor measurements using
-the Keysight 4294A Precision Impedance Analyzer, the Agilent 4155C/4156C
-Semiconductor Parameter Analyzer, and the Keysight E4980A LCR Meter.
+Description: Command-Line Interface (CLI) for semiconductor measurement automation.
+
+This is the text-based menu system that runs in a terminal window.  It is the
+alternative to the graphical interface (gui.py).  Use it when you are
+connected via SSH, running in a headless environment, or simply prefer typing.
+
+How the menus work:
+  1. You pick an instrument (PIA, PSPA, or LCR) or "CRYO" for a temperature
+     sweep.
+  2. You pick a measurement from the numbered list.
+  3. You type in parameters (frequency, voltage, etc.) when prompted.
+  4. The measurement runs, data files are saved, and you return to the menu.
+
+Cryogenic sweep mode (choice 0) lets you queue multiple measurements from
+different instruments and have them all execute automatically at each
+temperature point as the system ramps down.
+
+This file is the largest in the project because it contains the full set of
+measurement execution blocks for every instrument choice.  The structure is:
+  - cli_main()                 → main menu loop (instrument selection)
+  - run_pia_measurements()     → PIA sub-menu
+  - run_pspa_measurements()    → PSPA sub-menu
+  - run_lcr_measurements()     → LCR sub-menu
+  - execute_*_measurement()    → one function per instrument that runs a
+                                  measurement directly (interactive prompts)
+  - _prepare_*_cryo()          → one function per instrument that collects
+                                  parameters upfront and returns a callable
+                                  for the cryo sweep queue
+  - run_cryo_sweep()           → orchestrates the temperature sweep
 """
 
 import os
@@ -13,7 +39,7 @@ import logging
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Add directories to path
+# Add the 'utility' and 'measurement functions' folders to Python's search path.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'utility'))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'measurement functions'))
 
@@ -39,12 +65,17 @@ log = logging.getLogger(__name__)
 # =============================
 # Global Cryo Parameters
 # =============================
+# These module-level variables track whether cryogenic mode is active.
+# When the user selects "CRYO" from the main menu, cryo_enabled is set
+# to True and cryo_params is filled with temperature range and ramp rate.
 cryo_enabled = False
 cryo_params = None  # Will hold temperature sweep parameters
 
 # =============================
 # Measurement aliases for convenience
 # =============================
+# Re-export the measurement name lists from measurements_config so they
+# can be referenced more concisely throughout this file.
 pia_measurements = PIA_MEASUREMENTS
 pspa_measurements = PSPA_MEASUREMENTS
 lcr_measurements = LCR_MEASUREMENTS
@@ -446,9 +477,11 @@ def _pia_cv_butterfly(plot_mode="cp"):
 # =============================
 # Cryo Prepare Functions
 # =============================
-# Each _prepare_*_cryo(choice) function collects measurement parameters
-# upfront and returns (name, callable) where the callable executes the
-# measurement with the pre-bound params.  Used by run_cryo_sweep().
+# When running a cryogenic sweep the software cannot pause to ask the user
+# for input at each temperature point.  So each _prepare_*_cryo() function
+# asks for ALL parameters up front (before the sweep starts), bundles them
+# into a closure, and returns (name, callable).  run_cryo_sweep() then calls
+# each closure at every temperature point without further user interaction.
 
 def _prepare_pia_cryo(choice):
     """Collect PIA parameters and return (name, executor) for cryo queue."""
@@ -1255,6 +1288,13 @@ def _prepare_lcr_cryo(choice):
         return name, None
 
 
+# =============================
+# PIA Interactive Execution
+# =============================
+# Direct (non-cryo) PIA measurements.  Each choice number corresponds to a
+# row in the PIA measurement list.  The user is prompted for parameters
+# interactively before each run.
+
 def execute_pia_measurement(choice):
     """Execute the selected PIA measurement."""
     repeating = True
@@ -1479,6 +1519,12 @@ def execute_pia_measurement(choice):
         if repeat_input != 'y':
             repeating = False
 
+
+# =============================
+# PSPA Interactive Execution
+# =============================
+# Direct (non-cryo) PSPA measurements.  Each choice number corresponds to a
+# row in the PSPA measurement list.
 
 def run_pspa_measurements():
     """Run PSPA measurement menu."""
@@ -1930,6 +1976,12 @@ def execute_pspa_measurement(choice):
         if repeat_input != 'y':
             repeating = False
 
+
+# =============================
+# LCR Interactive Execution
+# =============================
+# Direct (non-cryo) LCR measurements.  Each choice number corresponds to a
+# row in the LCR measurement list.
 
 def run_lcr_measurements():
     """Run LCR measurement menu."""

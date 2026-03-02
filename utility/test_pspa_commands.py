@@ -1,6 +1,19 @@
 """
-Test script to verify PSPA SCPI commands.
-Use this to test which command syntax works with your PSPA.
+Diagnostic script for the PSPA (4155C/4156C) command interface.
+
+This script is NOT used during normal measurements.  It exists solely to help
+you figure out which command syntax your specific instrument understands.
+It tries several different read/query formats and reports which ones succeed
+and which ones fail.
+
+The main measurement code (pspa.py) uses FLEX syntax exclusively.  This
+script tests various SCPI-style commands for comparison.
+
+How to use:
+  1. Open a terminal in this folder.
+  2. Set GPIB_ADDRESS below to your instrument's address.
+  3. Run:  python test_pspa_commands.py
+  4. Read the output to see which commands work on your hardware.
 """
 
 import pyvisa

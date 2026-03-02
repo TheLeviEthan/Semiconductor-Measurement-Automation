@@ -2,9 +2,25 @@
 Filename: gui.py
 Author: Ethan Ruddell
 Date: 2026-2-12
-Description: Implements a simple GUI for semiconductor measurement automation
-using tkinter. Provides an interface to configure and run measurements on
-the Keysight 4294A, Agilent 4155C/4156C, and Keysight E4980A instruments.
+Description: Graphical User Interface (GUI) for the measurement automation.
+
+This file builds a window using Python's built-in tkinter library.  The window
+lets you:
+  1. Choose an instrument (PIA, PSPA, or LCR).
+  2. Pick a measurement from a scrollable list.
+  3. Fill in parameters (frequency, voltage, etc.) in dynamically generated
+     text fields.
+  4. Optionally enable a cryogenic temperature sweep, which queues multiple
+     measurements to be run at each temperature point.
+  5. Click "Run Measurement" (or "Start Cryo Sweep") to begin.
+
+Measurements run in a background thread so the window stays responsive.
+Status updates and errors are displayed in real-time in the status area
+at the bottom of the window.
+
+The GUI does NOT contain any instrument communication code.  It delegates
+all actual measurements to gui_measurements.py, which in turn calls the
+instrument driver modules (pia.py, pspa.py, lcr.py, cryo.py).
 """
 
 import tkinter as tk
@@ -14,7 +30,8 @@ import os
 import logging
 import threading
 
-# Add directories to path
+# Add the 'utility' and 'measurement functions' folders to Python's search
+# path so that module imports work without package prefixes.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'utility'))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'measurement functions'))
 
@@ -29,7 +46,14 @@ log = logging.getLogger(__name__)
 
 
 class MeasurementGUI:
-    """Main GUI class for semiconductor measurement automation."""
+    """
+    Main GUI class for semiconductor measurement automation.
+
+    This class manages the entire window: instrument selection, measurement
+    selection, parameter entry, optional cryogenic sweep, and status display.
+    All long-running operations (measurements, cryo sweeps) are executed in
+    background threads so the window never freezes.
+    """
 
     PIA_MEASUREMENTS = PIA_MEASUREMENTS
     PSPA_MEASUREMENTS = PSPA_MEASUREMENTS
@@ -61,7 +85,7 @@ class MeasurementGUI:
         self.update_measurement_list()
 
     def create_widgets(self):
-        """Create GUI widgets."""
+        """Build all visual elements of the window (labels, buttons, text fields, etc.)."""
         # --- Main Frame ---
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -324,7 +348,7 @@ class MeasurementGUI:
             self.output_dir_var.set(folder)
 
     def toggle_cryo_params(self):
-        """Show/hide cryo parameters based on checkbox state."""
+        """Show or hide the cryogenic parameter fields when the checkbox is toggled."""
         if self.cryo_var.get():
             self.cryo_params_frame.grid()
             self.queue_frame.grid()
@@ -347,7 +371,7 @@ class MeasurementGUI:
             self.update_status("Cryo mode disabled - running single measurements")
 
     def queue_measurement(self):
-        """Queue the selected measurement (with current params) for cryo sweep."""
+        """Add the currently selected measurement (with its parameters) to the cryo queue."""
         try:
             instrument = self.instrument_var.get()
             measurement_idx, measurement_name = self.get_selected_measurement()
@@ -371,7 +395,7 @@ class MeasurementGUI:
             self.update_status("Queue cleared")
 
     def start_cryo_sweep(self):
-        """Start the cryogenic temperature sweep."""
+        """Validate cryo parameters and launch the temperature sweep in a background thread."""
         if not self.measurement_queue:
             messagebox.showerror("Empty Queue", "Please queue at least one measurement before starting sweep.")
             return
@@ -425,7 +449,7 @@ class MeasurementGUI:
             self.progress_var.set(0)
 
     def _run_cryo_sweep_thread(self, temp_end, meas_interval, ramp_rate):
-        """Execute cryo sweep in background thread."""
+        """Background thread: ramp temperature down and run queued measurements at each point."""
         def _restore_buttons():
             self.queue_btn.config(state='normal')
             self.start_sweep_btn.config(state='normal')
@@ -553,7 +577,7 @@ class MeasurementGUI:
         return params
 
     def update_status(self, message):
-        """Update the status text area (thread-safe)."""
+        """Append a line to the status box at the bottom of the window (thread-safe)."""
         def _update():
             self.status_text.config(state='normal')
             self.status_text.insert(tk.END, message + "\n")
@@ -596,7 +620,7 @@ class MeasurementGUI:
             self.progress_var.set(0)
 
     def _run_measurement_thread(self, instrument, measurement_idx, measurement_name):
-        """Execute measurement in background thread."""
+        """Background thread: execute a single measurement and update the status bar."""
         try:
             params = self.get_params_dict()
             

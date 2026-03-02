@@ -3,8 +3,23 @@ Filename: gui_measurements.py
 Author: Ethan Ruddell
 Date: 2026-2-27
 Description: GUI-specific measurement execution functions.
-These take a params dict from the GUI and call instrument functions directly,
-without any interactive input() prompts.
+
+When the user clicks "Run Measurement" in the GUI, this module is called.
+It receives the measurement choice and a dictionary of parameter values
+(already extracted from the GUI text fields) and calls the appropriate
+instrument driver to perform the measurement.
+
+Key design points:
+  - NO input() calls anywhere.  All parameters come from the `params` dict.
+    This is critical because `input()` blocks the entire program and would
+    freeze the GUI.
+  - matplotlib is set to the "Agg" (non-interactive) backend so that plot
+    images can be created safely from a background thread.
+  - Each function follows the same pattern:
+      1. Extract parameters from `params`.
+      2. Open an InstrumentSession (connect → measure → auto-disconnect).
+      3. Save CSV data via file_management.save_csv().
+      4. Save plot images via file_management.save_plot() / save_image().
 """
 
 import os
@@ -15,7 +30,7 @@ import matplotlib
 matplotlib.use("Agg")  # Non-interactive backend for thread safety
 import matplotlib.pyplot as plt
 
-# Add directories to path
+# Add the 'utility' and 'measurement functions' folders to Python's search path.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'utility'))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'measurement functions'))
 
@@ -31,6 +46,7 @@ log = logging.getLogger(__name__)
 # =============================
 # Helper
 # =============================
+# Small utility function needed for PIA instrument cleanup.
 
 def _pia_safe_close(inst):
     """Turn off DC bias and close PIA instrument."""
@@ -44,6 +60,8 @@ def _pia_safe_close(inst):
 # =============================
 # PIA GUI Measurements
 # =============================
+# Each choice number corresponds to a row in the PIA measurement listbox
+# defined in measurements_config.py.
 
 def execute_pia_gui(choice, params):
     """Execute a PIA measurement using GUI-provided params (no input() calls)."""
@@ -235,6 +253,7 @@ def execute_pia_gui(choice, params):
 # =============================
 # PSPA GUI Measurements
 # =============================
+# Each choice number corresponds to a row in the PSPA measurement listbox.
 
 def execute_pspa_gui(choice, params):
     """Execute a PSPA measurement using GUI-provided params (no input() calls)."""
@@ -503,6 +522,7 @@ def execute_pspa_gui(choice, params):
 # =============================
 # LCR GUI Measurements
 # =============================
+# Each choice number corresponds to a row in the LCR measurement listbox.
 
 def execute_lcr_gui(choice, params):
     """Execute an LCR measurement using GUI-provided params (no input() calls)."""

@@ -2,13 +2,29 @@
 Filename: measurements_config.py
 Author: Ethan Ruddell
 Date: 2026-02-13
-Description: Centralized configuration for all measurement types and parameters.
-             Used by both CLI and GUI to ensure consistency.
+Description: Central catalogue of every measurement the software can perform.
+
+This file is the SINGLE SOURCE OF TRUTH for:
+  - The ordered list of measurement names for each instrument
+    (PIA, PSPA, LCR).  Both the GUI drop-down and the CLI menu
+    read from these lists, so they always stay in sync.
+  - The parameter definitions that the GUI uses to build its
+    dynamic entry fields (label text, dictionary key, default value).
+
+When you add a new measurement to an instrument driver you should:
+  1. Append its name to the relevant list (PIA / PSPA / LCR).
+  2. Add a MEASUREMENT_PARAMS entry for (instrument, index) with
+     the required parameters.
+  3. Implement the actual measurement logic in the driver module
+     and the GUI/CLI execution logic.
 """
 
 # =============================
 # Measurement Lists
 # =============================
+# Each list below enumerates the measurements available for one instrument.
+# The order matters: index 1 in the list corresponds to choice 1 in the menu.
+# Names should be short and descriptive so they fit nicely in the GUI listbox.
 
 PIA_MEASUREMENTS = [
     "Impedance Magnitude vs Frequency",
@@ -53,6 +69,12 @@ LCR_MEASUREMENTS = [
 # =============================
 # GUI Parameter Definitions
 # =============================
+# This dictionary tells the GUI which input fields to show for each
+# measurement.  The key is a tuple (instrument_name, measurement_index)
+# and the value is a list of (display_label, dict_key, default_value)
+# tuples.  When the user selects a measurement, the GUI reads this
+# dictionary and dynamically creates text entry boxes for every parameter.
+#
 # Maps (instrument, measurement_idx) to [(label, key, default_value), ...]
 
 MEASUREMENT_PARAMS = {
@@ -241,11 +263,19 @@ MEASUREMENT_PARAMS = {
 }
 
 # =============================
-# Measurement Aliases
+# Helper Functions
 # =============================
+# Convenience functions so the rest of the code doesn't have to know the
+# internal structure of the lists above.
+
 # Get measurement name by instrument and index
 def get_measurement_name(instrument: str, idx: int) -> str:
-    """Get measurement name by instrument and 1-indexed measurement number."""
+    """Return the human-readable name of a measurement.
+
+    Args:
+        instrument: "PIA", "PSPA", or "LCR"
+        idx:        1-indexed measurement number (matches the menu / listbox)
+    """
     if instrument == "PIA":
         return PIA_MEASUREMENTS[idx - 1] if 1 <= idx <= len(PIA_MEASUREMENTS) else ""
     elif instrument == "PSPA":

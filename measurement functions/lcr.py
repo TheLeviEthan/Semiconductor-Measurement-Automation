@@ -2,8 +2,36 @@
 Filename: lcr.py
 Author: Ethan Ruddell
 Date: 2026-02-12
-Description: Contains all constants and functions for LCR measurements.
-            For use with E4980A LCR from Agilent (Keysight).
+Description: Driver for the Keysight (Agilent) E4980A LCR Meter.
+
+An LCR meter measures the impedance of a component by applying a small AC
+signal and analysing the response.  Depending on the measurement mode it
+reports different pairs of quantities:
+  CPD  = parallel capacitance + dissipation factor
+  ZTD  = impedance magnitude + phase angle
+  RX   = resistance + reactance
+  GB   = conductance + susceptance
+  LPQ  = parallel inductance + quality factor
+  ...and many more (see initialize_e4980a() for a complete list)
+
+The E4980A uses standard SCPI commands over GPIB.  Key commands:
+  :FUNC:IMP:TYPE CPD   – select measurement mode
+  :FREQ:CW <Hz>       – set fixed frequency
+  :VOLT:LEV <V>        – set AC signal level
+  :BIAS:VOLT / :BIAS:STAT  – set and enable DC bias
+  :LIST:FREQ           – load frequency list for sweeps
+  :TRIG:IMM / :FETCH?  – trigger measurement and read result
+
+Frequency range: 20 Hz to 2 MHz.
+AC level range:  0 to 20 V.
+DC bias range:  -40 V to +40 V.
+
+Typical workflow:
+  1. connect_e4980a()    – open GPIB session, verify identity
+  2. initialize_e4980a() – reset, set measurement mode, trigger, format
+  3. set_ac_level() / configure_dc_bias() – configure signal levels
+  4. measure_*()         – perform sweep or single-point measurement
+  5. disconnect_e4980a() – turn off bias, return to safe state, close
 """
 
 import pyvisa
@@ -16,7 +44,9 @@ log = logging.getLogger(__name__)
 # =============================
 # User settings and constants
 # =============================
-GPIB_ADDRESS = "GPIB0::_____::INSTR"   # GPIB address for E4980A LCR
+# These defaults are used when a function is called without explicit
+# parameters.  Update GPIB_ADDRESS to match your lab setup.
+GPIB_ADDRESS = "GPIB0::_____::INSTR"   # GPIB address for E4980A LCR (fill in)
 
 # Default Frequency settings
 FREQ_DEFAULT_HZ = 1e3    # default frequency, Hz
@@ -44,6 +74,8 @@ MEAS_TIME = "MED"        # "SHOR", "MED", "LONG", "LONG2" (E4980A specific)
 # =============================
 # Measurement Parameters Storage
 # =============================
+# Stores the most recently used parameters so the CLI can offer a
+# "use last parameters?" shortcut.
 current_parameters = {
     "frequency": FREQ_DEFAULT_HZ,
     "ac_level_v": AC_LEVEL_V,
@@ -56,6 +88,8 @@ current_parameters = {
 # =============================
 # Connection and Initialization
 # =============================
+# Functions to open a GPIB session, reset the instrument, and configure
+# it for a specific measurement mode.
 
 def connect_e4980a(resource_name=None):
     """
@@ -155,6 +189,8 @@ def check_errors(inst):
 # =============================
 # Measurement Configuration Functions
 # =============================
+# Set frequency, AC level, DC bias, integration time, and measurement range.
+# These are building blocks called by the higher-level measurement functions.
 
 def set_frequency(inst, freq_hz):
     """
@@ -239,6 +275,9 @@ def set_measurement_range(inst, auto=True, range_val=None):
 # =============================
 # Sweep Configuration Functions
 # =============================
+# The E4980A uses LIST mode for sweeps: we send an explicit list of
+# frequency or voltage values, then trigger the instrument to step
+# through them automatically.
 
 def configure_frequency_sweep(inst, start_freq, stop_freq, num_points, sweep_type="LIN"):
     """
@@ -294,6 +333,8 @@ def configure_voltage_sweep(inst, start_v, stop_v, num_points):
 # =============================
 # Single Point Measurement Functions
 # =============================
+# Measure one value at the current frequency / bias settings.
+# Useful for quick spot-checks or when building custom measurement loops.
 
 def measure_single_point(inst):
     """
@@ -384,6 +425,8 @@ def measure_inductance(inst, freq_hz=None, mode="LPQ"):
 # =============================
 # Sweep Measurement Functions
 # =============================
+# High-level functions that configure a sweep, trigger it, read back all
+# data, and return the results as numpy arrays.
 
 def measure_frequency_sweep(inst, start_freq, stop_freq, num_points, sweep_type="LOG", 
                             measurement_function="CPD"):
@@ -527,6 +570,7 @@ def measure_cv_butterfly(inst, freq_hz, v_min, v_max, num_points):
 # =============================
 # Dielectric Parameter Calculations
 # =============================
+# Convert raw measurement data into physically meaningful quantities.
 
 def compute_eps_r(capacitance, thickness_nm, diameter_um):
     """
@@ -569,6 +613,7 @@ def compute_impedance_components(z_mag, theta_deg):
 # =============================
 # Parameter Management
 # =============================
+# CLI helpers for prompting the user for measurement parameters.
 
 def get_measurement_parameters(use_last=False):
     """
@@ -617,6 +662,7 @@ def prompt_for_parameter_duplication():
 # =============================
 # Utility Functions
 # =============================
+# Convenience wrappers for connection + initialization.
 
 def setup(resource_name=None, measurement_function="CPD"):
     """
@@ -644,6 +690,12 @@ def reset_instrument(inst):
 # =============================
 # Open / Short / Load Correction
 # =============================
+# Fixture corrections compensate for parasitic impedance in the test
+# leads and probe station.  Before measuring a real device:
+#   1. Run open correction  (probes in air)      – subtracts stray capacitance
+#   2. Run short correction (probes touching)     – subtracts lead resistance
+#   3. Optionally run load correction (known R)   – fine-tunes accuracy
+# These only need to be done once per probe setup, not before every measurement.
 
 def perform_open_correction(inst):
     """
@@ -705,6 +757,8 @@ def disable_corrections(inst):
 # =============================
 # Additional Sweep Measurements
 # =============================
+# Convenience wrappers that call measure_frequency_sweep() with a specific
+# measurement mode pre-selected.
 
 def measure_quality_factor_vs_frequency(inst, start_freq, stop_freq, num_points,
                                          sweep_type="LOG", mode="CPQ"):

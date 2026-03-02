@@ -4,10 +4,23 @@ Author: Ethan Ruddell
 Date: 2026-02-12
 Description: Shared GPIB / VISA helpers used across all instruments.
 
-Provides:
-    - ``gpib_retry``   — decorator that retries flaky VISA queries
-    - ``InstrumentSession`` — context-manager for safe connect / disconnect
-    - ``prompt_float``, ``prompt_int``, ``prompt_choice`` — typed CLI helpers
+This module provides three kinds of building blocks that every instrument
+driver and user interface relies on:
+
+1. Automatic retry for flaky GPIB calls
+   Instruments sometimes fail to reply on the first try.  The `gpib_retry`
+   decorator wraps any function so that it is automatically retried a few
+   times before giving up.
+
+2. Safe connect / disconnect (InstrumentSession)
+   A "context manager" (used with Python's `with` statement) that guarantees
+   the instrument is disconnected even if an error occurs mid-measurement.
+   This prevents instruments from being left in a stuck state.
+
+3. User-input helpers for the CLI
+   Functions like `safe_float_input` loop until the user types a valid number
+   (or presses Enter for the default).  This stops the program from crashing
+   on bad keyboard input.
 """
 
 import functools
@@ -18,6 +31,11 @@ log = logging.getLogger(__name__)
 
 # ============================================================
 # Retry decorator for VISA calls
+# ------------------------------------------------------------
+# GPIB communication can be unreliable: cables pick up noise,
+# instruments may be briefly busy, etc.  This decorator lets us
+# wrap any function so that failures are retried automatically
+# before we give up and show an error.
 # ============================================================
 
 def gpib_retry(max_retries: int = 3, delay: float = 0.5, backoff: float = 2.0):
@@ -63,6 +81,17 @@ def gpib_retry(max_retries: int = 3, delay: float = 0.5, backoff: float = 2.0):
 
 # ============================================================
 # Instrument context manager
+# ------------------------------------------------------------
+# A "context manager" is a Python pattern that guarantees
+# cleanup code runs even when something goes wrong.  You use it
+# with the `with` keyword:
+#
+#   with InstrumentSession(connect_fn, disconnect_fn) as inst:
+#       ... do measurements ...
+#   # disconnect_fn is called automatically here, even on error
+#
+# This prevents an instrument from being left powered-on or
+# in a half-configured state after a crash.
 # ============================================================
 
 class InstrumentSession:
@@ -102,6 +131,12 @@ class InstrumentSession:
 
 # ============================================================
 # CLI prompt helpers
+# ------------------------------------------------------------
+# These functions are used by the command-line interface (cli.py)
+# to ask the user for numbers, yes/no answers, or menu choices.
+# They loop until valid input is entered (or the user presses
+# Enter to accept the default), so the program never crashes
+# from bad keyboard input.
 # ============================================================
 
 def safe_float_input(prompt: str, default: float) -> float:

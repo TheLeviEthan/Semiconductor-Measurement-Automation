@@ -1,6 +1,20 @@
 """
-Test script for Agilent 4156C SCPI commands.
-This script verifies the correct command syntax for your specific instrument.
+Diagnostic script for the Agilent 4156C Parameter Analyzer (SCPI commands).
+
+This script is NOT used during normal measurements.  It exists solely to help
+you debug GPIB communication problems.  It sends one command at a time and
+prints the instrument’s error response so you can tell whether the command
+syntax is correct for your specific instrument model.
+
+IMPORTANT: The main measurement code (pspa.py) uses FLEX syntax, not SCPI.
+This script was written early on to test SCPI commands; keeping it around
+for troubleshooting purposes only.
+
+How to use:
+  1. Open a terminal in this folder.
+  2. Set GPIB_ADDRESS below to your instrument's address.
+  3. Run:  python test_4156c_commands.py
+  4. Look at the "Error response" lines.  '0,"No error"' means success.
 """
 
 import pyvisa

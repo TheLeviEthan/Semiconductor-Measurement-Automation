@@ -4,14 +4,26 @@ Author: Ethan Ruddell
 Date: 2026-02-12
 Description: Centralized Python logging configuration for the project.
 
-Usage::
+Logging is how the software records what it is doing as it runs.  Instead of
+just printing to the screen, log messages are also (optionally) written to a
+text file so you can review them later if something goes wrong.
 
-    import logging_config
-    logging_config.setup()          # call once at startup (main.py)
+This module is called ONCE at startup by main.py.  After that, every other
+module can write log messages like:
 
     import logging
     log = logging.getLogger(__name__)
-    log.info("Measurement started")
+    log.info("Measurement started")   # informational message
+    log.warning("Temperature high!")   # warning
+    log.error("Connection failed")     # error
+
+Log levels from least to most severe:
+    DEBUG  – very detailed, usually only for developers
+    INFO   – normal operation messages
+    WARNING – something unexpected but not fatal
+    ERROR  – something went wrong
+
+The log level is set in config.yaml under the "logging" section.
 """
 
 import logging
@@ -40,7 +52,10 @@ def setup(level=None, log_to_file=None, log_filename=None, output_dir=None):
     output_dir : str, optional
         Directory for the log file.  Defaults to cwd.
     """
-    # --- resolve settings from config.yaml → function args → hard defaults ---
+    # Figure out the desired settings.  Priority order:
+    #   1. Explicit function arguments (highest priority)
+    #   2. Values from config.yaml
+    #   3. Hard-coded defaults (lowest priority)
     if _cfg is not None:
         _sec = _cfg.get_section("logging")
     else:
@@ -76,7 +91,8 @@ def setup(level=None, log_to_file=None, log_filename=None, output_dir=None):
 
     logging.basicConfig(level=numeric_level, handlers=handlers, force=True)
 
-    # Quiet down noisy libraries
+    # The pyvisa library produces a lot of low-level chatter; only show its
+    # warnings and errors so our own messages are easier to read.
     logging.getLogger("pyvisa").setLevel(logging.WARNING)
 
     logging.getLogger(__name__).debug("Logging initialised (level=%s, file=%s)", level, log_to_file)

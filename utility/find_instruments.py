@@ -1,6 +1,18 @@
 """
-Utility script to find and test VISA instruments.
-Run this to discover the GPIB address of your PSPA.
+Filename: find_instruments.py
+Author: Ethan Ruddell
+Description: Utility script to discover all VISA/GPIB instruments connected
+             to this computer.
+
+Run this file directly from a terminal:
+    python find_instruments.py
+
+It will print the GPIB address and identity (manufacturer, model) of every
+instrument it can find.  Copy the address string (e.g. 'GPIB0::16::INSTR')
+into config.yaml or the relevant module constant to use that instrument.
+
+This is especially useful the first time you set up the lab computer or when
+an instrument has been moved to a different GPIB address.
 """
 
 import pyvisa

@@ -3,7 +3,23 @@ Filename: parameter_validators.py
 Author: Ethan Ruddell
 Date: 2026-02-13
 Description: Centralized parameter validation for all measurement types.
-             Consolidates validation logic scattered across instrument modules.
+
+Before sending a command to an instrument we need to make sure the numbers
+the user entered are safe and sensible.  For example:
+  - Frequency must be between 20 Hz and 2 MHz (hardware limits)
+  - Temperature must be between 1.4 K and 325 K (cryostat limits)
+  - Compliance (current safety limit) must be positive
+  - Step size must not be zero
+
+If a value is out of range this module will:
+  1. Log a warning so the user knows it was adjusted.
+  2. Clip the value to the nearest safe limit (instead of crashing).
+
+If a value is critically wrong (e.g. start == stop), a ValidationError is
+raised so the measurement does not proceed.
+
+By keeping all validation in one place we avoid duplicating the same checks
+across every instrument module and every user interface.
 """
 
 import numpy as np
@@ -20,6 +36,11 @@ class ValidationError(ValueError):
 # =============================
 # Frequency Validation
 # =============================
+# Hardware limits for the instruments in this project:
+#   PIA (4294A):  40 Hz – 110 MHz
+#   LCR (E4980A): 20 Hz – 2 MHz
+# The defaults here (20 Hz – 2 MHz) cover the LCR range; PIA functions
+# can override min/max when calling these validators.
 
 def validate_frequency(freq_hz: float, min_hz: float = 20, max_hz: float = 2e6) -> float:
     """Validate and clip frequency to acceptable range."""
@@ -51,6 +72,7 @@ def validate_frequency_range(
 # =============================
 # Temperature Validation
 # =============================
+# Cryo-Con 32B controller supports roughly 1.4 K to 325 K.
 
 def validate_temperature(
     temp_k: float,
@@ -86,6 +108,7 @@ def validate_temperature_range(
 # =============================
 # Ramp Rate Validation
 # =============================
+# Ramp rate is how fast the cryostat changes temperature (K per minute).
 
 def validate_ramp_rate(
     ramp_k_per_min: float,
@@ -104,6 +127,7 @@ def validate_ramp_rate(
 # =============================
 # Voltage Validation
 # =============================
+# General purpose voltage range check (default ±100 V covers all instruments).
 
 def validate_voltage(
     voltage_v: float,
@@ -139,6 +163,8 @@ def validate_voltage_range(
 # =============================
 # Current Validation
 # =============================
+# Compliance is the maximum current the instrument will allow before it
+# stops increasing voltage, protecting the device under test (DUT).
 
 def validate_compliance(
     compliance_a: float,
@@ -157,6 +183,7 @@ def validate_compliance(
 # =============================
 # Point Count Validation
 # =============================
+# The number of data points in a sweep (must be at least 2, at most 10,000).
 
 def validate_point_count(
     num_points: int,
@@ -189,6 +216,7 @@ def validate_step_size(
 # =============================
 # AC Level/Amplitude Validation
 # =============================
+# The AC oscillator voltage used by the LCR meter and PIA.
 
 def validate_ac_level(
     ac_level_v: float,
@@ -207,6 +235,8 @@ def validate_ac_level(
 # =============================
 # Choice Validation
 # =============================
+# Validates that a text choice (like "LIN" or "LOG") is one of the
+# allowed options.
 
 def validate_choice(value: str, valid_options: list[str], default: str = None) -> str:
     """Validate that choice is in list of valid options."""
@@ -229,6 +259,10 @@ def validate_choice(value: str, valid_options: list[str], default: str = None) -
 # =============================
 # Multiple Parameter Validation
 # =============================
+# ParameterSet lets you validate several related parameters at once
+# (e.g. a full frequency sweep: start, stop, and point count).
+# If anything is wrong it collects ALL the errors instead of stopping
+# at the first one, so the user can fix them in one go.
 
 class ParameterSet:
     """Helper class for validating related parameters together."""
@@ -288,6 +322,9 @@ class ParameterSet:
 # =============================
 # Bulk Validation Helper
 # =============================
+# A one-stop function that validates a whole parameter dictionary
+# based on the measurement type ("frequency_sweep", "voltage_sweep",
+# or "cryo_sweep").  Returns a cleaned-up copy of the dictionary.
 
 def validate_measurement_params(
     measurement_type: str,

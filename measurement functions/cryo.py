@@ -2,16 +2,39 @@
 Filename: cryo.py
 Author: Ethan Ruddell (updated by assistant)
 Date: 2026-02-16
-Description:
-    Cryo-Con Model 32 / 32B temperature controller module (GPIB / IEEE-488.2 / SCPI).
+Description: Driver for the Cryo-Con Model 32 / 32B temperature controller.
 
-Key manual-aligned behaviors:
-    - Read temperature via INPUT <chan>:TEMPER? (short: INP <chan>:TEMP?)
-    - Set loop setpoint via LOOP <no>:SETPT <temp>
-    - Set ramp rate via LOOP <no>:RATE <rate> (Units/min)
-    - Loop control type via LOOP <no>:TYPE <type> (PID, RAMPP, OFF, etc.)
-    - Do NOT spam *RST (manual warns it may lock up early IEEE-488 systems)
-    - Do not rely on text termination chars on GPIB; use read_raw (EOI)
+This module lets the software ramp the cryostat to a target temperature, wait
+for it to stabilise, and then hold steady while measurements are taken.  It is
+used for cryogenic temperature sweeps where the same electrical measurements
+(impedance, I-V, etc.) are repeated at many different temperatures.
+
+Key concepts:
+  - Input channels (A, B): temperature sensors mounted on the sample stage.
+  - Control loop (1 or 2): the PID feedback loop that drives the heater to
+    reach and maintain the desired temperature ("setpoint").
+  - Ramp mode (RAMPP): the controller smoothly ramps from the current
+    temperature to the setpoint at a specified rate (K/min) instead of
+    jumping instantly.
+
+IMPORTANT hardware notes (from the Cryo-Con 32B manual):
+  - Do NOT send *RST repeatedly — it can lock up older IEEE-488 systems.
+    Reset is disabled by default (ENABLE_RESET_ON_INIT = False).
+  - GPIB reads use read_raw() (EOI termination), NOT text termination
+    characters, because the 32B does not always send CR/LF.
+  - Robust retry logic is built into write_safe() and query_raw() because
+    the bus occasionally times out during temperature transitions.
+
+Typical workflow:
+  1. connect_cryocon()        – open GPIB session
+  2. initialize_cryocon()     – clear status, optionally reset
+  3. set_ramp_rate()          – how fast to change temperature (K/min)
+  4. set_temperature_setpoint() – target temperature
+  5. enable_ramp_mode()       – start ramping
+  6. wait_for_temperature()   – block until stable within tolerance
+  7. hold_temperature()       – switch to PID hold while measuring
+  8. ...repeat 4-7 for each temperature point...
+  9. disconnect_cryocon()     – turn off loop, close session
 """
 
 
@@ -32,6 +55,8 @@ log = logging.getLogger(__name__)
 # =============================
 # User settings and constants
 # =============================
+# Hardware addresses and safe operating limits.  Adjust these if your
+# cryostat or controller has different specifications.
 GPIB_ADDRESS = "GPIB0::12::INSTR"
 
 # Input channels on Model 32/32B are A and B
@@ -77,6 +102,10 @@ current_parameters = {
 # =============================
 # Low-level VISA helpers
 # =============================
+# These functions handle the quirks of GPIB communication with the Cryo-Con:
+# - Responses may contain garbage bytes → strip them
+# - Commands may time out if the controller is busy → retry automatically
+# - Reads use raw bytes (EOI) instead of text-terminated strings
 
 def _strip_response_bytes(b: bytes) -> str:
     # responses may include CR/LF; strip whitespace and nulls
@@ -165,6 +194,7 @@ def _reopen_same_resource(inst):
 # =============================
 # Connection and Initialization
 # =============================
+# Open a GPIB session to the Cryo-Con and prepare it for use.
 
 def connect_cryocon(resource_name: str | None = None):
     """
@@ -258,6 +288,8 @@ def check_errors(cryo):
 # =============================
 # Cryo-Con SCPI wrappers
 # =============================
+# Thin wrappers around the controller's GPIB commands.  Each function
+# sends one command and, for queries, parses the response.
 
 def _norm_channel(ch: str) -> str:
     ch = str(ch).strip().upper()
@@ -333,6 +365,9 @@ def get_loop_ramp_active(cryo, loop: int = 1) -> str | None:
 # =============================
 # API compatible functions (your app calls these)
 # =============================
+# Higher-level functions that the rest of the application calls.
+# They translate between the app's concept of a "control loop" and
+# the controller's concept of input channels + loops.
 
 def get_current_temperature(cryo, loop: int = 1):
     """
@@ -473,6 +508,7 @@ def generate_temperature_sweep_points(start_k, end_k, interval_k):
 # =============================
 # Parameter Management
 # =============================
+# CLI helper that prompts the user for cryogenic sweep settings.
 
 def get_cryogenic_parameters():
     print("\n" + "=" * 60)
@@ -520,6 +556,7 @@ def get_cryogenic_parameters():
 # =============================
 # Utility
 # =============================
+# Convenience wrapper that connects AND initialises in one call.
 
 def setup(resource_name=None):
     """
