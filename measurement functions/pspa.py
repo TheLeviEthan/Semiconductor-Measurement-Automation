@@ -1,7 +1,7 @@
 """
 Filename: pspa.py
 Author: Ethan Ruddell
-Date: 2025-03-02
+Date: 2026-03-02
 Description: Driver for the Agilent 4155C / 4156C Semiconductor Parameter Analyzer.
 
 The 4155C/4156C has up to four SMU (Source/Measure Unit) channels.  Each SMU
@@ -418,7 +418,17 @@ def measure_iv_curve(pspa, v_start, v_stop, v_step, channel=1, compliance=0.1):
     
     output_off(pspa, channel)
     
-    return {'Voltage': np.array(voltage_array), 'Current': np.array(current_array)}
+    # Convert to numpy arrays
+    voltage_array = np.array(voltage_array)
+    current_array = np.array(current_array)
+    
+    # Remove first 0V datapoint and any near-zero points from startup
+    # Keep only points where we've actually applied meaningful voltage
+    mask = np.abs(voltage_array) >= 1e-6  # Filter out near-zero voltages
+    voltage_array = voltage_array[mask]
+    current_array = current_array[mask]
+    
+    return {'Voltage': voltage_array, 'Current': current_array}
 
 def measure_iv_bidirectional(pspa, v_max, v_step, channel=1, compliance=0.1):
     # Validate inputs
@@ -445,7 +455,17 @@ def measure_iv_bidirectional(pspa, v_max, v_step, channel=1, compliance=0.1):
     
     output_off(pspa, channel)
     
-    return {'Voltage': np.array(voltage_array), 'Current': np.array(current_array)}
+    # Convert to numpy arrays
+    voltage_array = np.array(voltage_array)
+    current_array = np.array(current_array)
+    
+    # Remove first 0V datapoint and any near-zero points from startup
+    # Keep only points where we've actually applied meaningful voltage
+    mask = np.abs(voltage_array) >= 1e-6  # Filter out near-zero voltages
+    voltage_array = voltage_array[mask]
+    current_array = current_array[mask]
+    
+    return {'Voltage': voltage_array, 'Current': current_array}
 
 # =============================
 # Pulse Measurements
@@ -649,7 +669,18 @@ def measure_diode_iv(pspa, v_start, v_stop, v_step, anode_ch=1, cathode_ch=2,
         i_out.append(i_val)
 
     pspa.write("CL")
-    return {'Voltage': np.array(v_out), 'Current': np.array(i_out)}
+    
+    # Convert to numpy arrays
+    v_out = np.array(v_out)
+    i_out = np.array(i_out)
+    
+    # Remove first 0V datapoint and any near-zero points from startup
+    # Keep only points where we've actually applied meaningful voltage
+    mask = np.abs(v_out) >= 1e-6  # Filter out near-zero voltages
+    v_out = v_out[mask]
+    i_out = i_out[mask]
+    
+    return {'Voltage': v_out, 'Current': i_out}
 
 
 def measure_gate_leakage(pspa, vgs_start, vgs_stop, vgs_step,
@@ -714,54 +745,97 @@ def measure_breakdown_voltage(pspa, v_start, v_stop, v_step, channel=1,
             break  # stop to protect DUT
 
     output_off(pspa, channel)
+    
+    # Convert to numpy arrays
+    v_out = np.array(v_out)
+    i_out = np.array(i_out)
+    
+    # Remove first 0V datapoint and any near-zero points from startup
+    # Keep only points where we've actually applied meaningful voltage
+    mask = np.abs(v_out) >= 1e-6  # Filter out near-zero voltages
+    v_out = v_out[mask]
+    i_out = i_out[mask]
+    # Recalculate breakdown_v if it was filtered out
+    if breakdown_v is not None and abs(breakdown_v) < 1e-6:
+        breakdown_v = v_out[0] if len(v_out) > 0 else None
+    
     return {
-        'Voltage': np.array(v_out),
-        'Current': np.array(i_out),
+        'Voltage': v_out,
+        'Current': i_out,
         'breakdown_v': breakdown_v,
     }
 
 
 def measure_resistance(pspa, i_start, i_stop, i_step, channel=1,
-                       compliance=10.0):
+                       compliance=10.0, sense_channel=None):
     """
-    Force current, measure voltage → compute resistance.
+    Four-point Kelvin resistance measurement: force current, measure voltage on separate channel.
 
-    Sweeps current through *channel*, measures voltage at each step.
-    Returns V, I arrays and the computed R (Ohm) via least-squares fit.
+    Forces current through *channel*, measures voltage on *sense_channel* (or same channel if None).
+    This provides more accurate resistance measurement by avoiding lead resistance effects.
+    
+    Args:
+        pspa: PyVISA instrument connection
+        i_start: Starting current (A)
+        i_stop: Stopping current (A)
+        i_step: Current step size (A)
+        channel: Channel to force current through (default: 1)
+        compliance: Voltage compliance limit (default: 10.0 V)
+        sense_channel: Channel to measure voltage on (default: None = use same channel as force)
+                      For true 4-point Kelvin: use different channel (e.g., channel=1, sense_channel=2)
 
     Returns:
         dict with keys 'Current' (A), 'Voltage' (V), and
         'resistance_ohm' (float, slope of linear fit).
     """
-    config_backup = SMU_CONFIG.get(channel, {}).copy()
+    # Default to same channel if sense_channel not specified
+    if sense_channel is None:
+        sense_channel = channel
+    
+    config_backup_force = SMU_CONFIG.get(channel, {}).copy()
+    config_backup_sense = SMU_CONFIG.get(sense_channel, {}).copy()
+    
+    # Configure force channel as current source
     configure_smu(pspa, channel, mode='CURR', compliance=compliance)
+    # Configure sense channel as voltage meter
+    configure_smu(pspa, sense_channel, mode='VOLT', compliance=compliance)
+    
+    # Enable both channels
     output_on(pspa, channel)
+    output_on(pspa, sense_channel)
 
     currents_arr = sweep_values(i_start, i_stop, i_step)
     i_out = []
     v_out = []
 
-    print("Starting Resistance measurement (force I, measure V)...")
+    print(f"Starting Resistance measurement (Kelvin 4-point: force I on ch{channel}, measure V on ch{sense_channel})...")
     for i_val in currents_arr:
         set_current(pspa, channel, i_val)
-        # For measuring voltage in FLEX we re-read the forced channel
-        # TV? is not standard on 4155C in FLEX; we use 'TI?' to read the
-        # compliance-side measurement and derive voltage from I * R.
-        # Alternate approach: use two channels (force I on ch1, measure V
-        # across ch1-ch2).  Here we approximate with DI + TI.
-        v_str = pspa.query(f"TV? {channel},0")
+        # Measure voltage on the sense channel
+        v_str = pspa.query(f"TV? {sense_channel},0")
         v_val = parse_flex_number(v_str)
         i_out.append(i_val)
         v_out.append(v_val)
 
+    # Turn off both channels
     output_off(pspa, channel)
+    output_off(pspa, sense_channel)
+    
     # Restore prior config
-    if config_backup:
-        SMU_CONFIG[channel] = config_backup
+    if config_backup_force:
+        SMU_CONFIG[channel] = config_backup_force
+    if config_backup_sense:
+        SMU_CONFIG[sense_channel] = config_backup_sense
 
     i_arr = np.array(i_out)
     v_arr = np.array(v_out)
-    # Least-squares linear fit R = ΔV / ΔI
+    
+    # Remove first 0A datapoint and any near-zero points
+    mask = np.abs(i_arr) >= 1e-9
+    i_arr = i_arr[mask]
+    v_arr = v_arr[mask]
+    
+    # Least-squares linear fit
     if len(i_arr) > 1:
         coeffs = np.polyfit(i_arr, v_arr, 1)
         resistance = coeffs[0]

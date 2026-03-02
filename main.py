@@ -1,7 +1,7 @@
 """
 Filename: main.py
 Author: Ethan Ruddell
-Date: 2026-2-27
+Date: 2026-3-2
 Description: Entry point for the NRG Semiconductor Measurement Automation.
 
 This is the file you run to start the software:
@@ -63,21 +63,25 @@ def gui_execute_measurement(instrument, measurement_idx, params):
         instrument: "PIA", "PSPA", or "LCR"
         measurement_idx: 1-indexed measurement number
         params: Dictionary of parameters from GUI entry fields
+    
+    Returns:
+        String path to the most recently saved image file, or None if no image was generated
     """
     from gui_measurements import execute_pia_gui, execute_pspa_gui, execute_lcr_gui
 
     try:
         if instrument == "PIA":
-            execute_pia_gui(measurement_idx, params)
+            return execute_pia_gui(measurement_idx, params)
         elif instrument == "PSPA":
-            execute_pspa_gui(measurement_idx, params)
+            return execute_pspa_gui(measurement_idx, params)
         elif instrument == "LCR":
-            execute_lcr_gui(measurement_idx, params)
+            return execute_lcr_gui(measurement_idx, params)
         else:
             raise ValueError(f"Unknown instrument: {instrument}")
     except Exception as e:
         log.error("Measurement failed: %s", e)
         raise
+
 
 
 def main():

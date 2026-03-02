@@ -945,7 +945,7 @@ def _prepare_pspa_cryo(choice):
         def run():
             with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
                 data = pspa.measure_resistance(
-                    inst, i_start, i_stop, i_step, force_ch, sense_ch, compliance)
+                    inst, i_start, i_stop, i_step, force_ch, compliance, sense_channel=sense_ch)
                 file_management.save_csv("resistance.csv",
                     np.column_stack([data['Current'], data['Voltage']]),
                     "Current_A, Voltage_V")
@@ -1956,7 +1956,7 @@ def execute_pspa_measurement(choice):
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
                     print("\nRunning resistance measurement...")
                     data = pspa.measure_resistance(
-                        pspa_inst, i_start, i_stop, i_step, force_ch, sense_ch, compliance
+                        pspa_inst, i_start, i_stop, i_step, force_ch, compliance, sense_channel=sense_ch
                     )
 
                     csv_data = np.column_stack([data['Current'], data['Voltage']])

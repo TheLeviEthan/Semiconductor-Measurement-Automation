@@ -234,3 +234,25 @@ def save_cycle_plot(title: str, x_label: str, y_label: str,
     fig.savefig(image_path, dpi=dpi, bbox_inches="tight")
     log.info("Saved image to: %s", image_path)
     return image_path
+
+def get_latest_image() -> str:
+    """Get the path to the most recently saved image file.
+    
+    Returns the absolute path to the newest PNG in output/images/.
+    Useful for displaying the last generated plot in the GUI.
+    Returns None if no images exist yet.
+    """
+    images_dir = os.path.join(output_dir, "images")
+    if not os.path.exists(images_dir):
+        return None
+    
+    try:
+        files = [os.path.join(images_dir, f) for f in os.listdir(images_dir) 
+                 if f.endswith('.png')]
+        if not files:
+            return None
+        # Return the most recently modified file
+        return max(files, key=os.path.getmtime)
+    except Exception as e:
+        log.warning("Failed to get latest image: %s", e)
+        return None
