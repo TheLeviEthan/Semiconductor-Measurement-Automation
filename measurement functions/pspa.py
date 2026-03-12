@@ -51,6 +51,10 @@ SMU_CONFIG = {}
 # Keys: 'width' (float, seconds), 'period' (float, seconds), 'hold' (float, seconds).
 PULSE_CONFIG = {}
 
+# Global state for measurement integration time.
+# Stored as FLEX/SCPI-compatible keywords: SHOR, MED, LONG.
+INTEGRATION_TIME = "MED"
+
 # =============================
 # Connection and Initialization
 # =============================
@@ -131,6 +135,75 @@ def check_errors(pspa):
         pass
     return errors
 
+def reset_instrument(pspa):
+    """
+    Perform a soft reset and reinitialize the instrument.
+    Call this if the instrument becomes unresponsive or enters an error state.
+    """
+    print("Attempting instrument reset...")
+    try:
+        # Soft reset
+        pspa.write("*RST")
+        time.sleep(1.0)
+        
+        # Clear errors
+        pspa.write("*CLS")
+        time.sleep(0.3)
+        
+        # Re-initialize FLEX mode
+        pspa.write("US")
+        time.sleep(0.3)
+        pspa.write("FMT 1")
+        time.sleep(0.3)
+        pspa.write("CL")
+        
+        print("Instrument reset complete.")
+        return True
+    except Exception as e:
+        print(f"Reset failed: {e}")
+        return False
+
+def diagnose_communication(pspa):
+    """
+    Diagnostic function to test instrument communication and report status.
+    """
+    print("\n" + "=" * 70)
+    print("INSTRUMENT DIAGNOSTICS")
+    print("=" * 70)
+    
+    try:
+        # Test basic connectivity
+        print("\n1. Testing connectivity...")
+        idn = pspa.query("*IDN?")
+        print(f"   ID: {idn.strip()}")
+        
+        # Check timeout setting
+        print(f"\n2. VISA Timeout: {pspa.timeout} ms")
+        
+        # Check for errors
+        print("\n3. Checking instrument errors...")
+        errors = check_errors(pspa)
+        if errors:
+            print(f"   Found {len(errors)} error(s):")
+            for err in errors:
+                print(f"     - {err}")
+        else:
+            print("   No errors reported.")
+        
+        # Test channel communication
+        print("\n4. Testing channel measurements...")
+        for ch in [1, 2]:
+            try:
+                current = measure_channel_current(pspa, ch, retry_count=1)
+                print(f"   Channel {ch}: {current:.4e} A (OK)")
+            except Exception as e:
+                print(f"   Channel {ch}: FAILED - {e}")
+        
+        print("\n" + "=" * 70)
+        
+    except Exception as e:
+        print(f"Diagnostics error: {e}")
+
 def disconnect_pspa(pspa):
     """Safely disconnect from PSPA."""
     try:
@@ -155,6 +228,73 @@ def measure_channel_current(pspa, channel):
     except Exception as e:
         print(f"Error measuring current on CH{channel}: {e}")
         return 0.0
+
+
+# =============================
+# Plot Display Functions
+# =============================
+# Control the 4155C/4156C built-in plot display on the instrument screen.
+# Uses SCPI PAGE mode commands to navigate and refresh the graph display.
+
+def goto_plot_page(pspa):
+    """
+    Switch to PAGE (SCPI) mode and navigate to the plot/graph display page.
+    The instrument will show real-time I-V curves as data is collected.
+    
+    Note: After this, use FLEX commands by sending 'US' again, or use SCPI ':PAGE:...' commands.
+    """
+    try:
+        # Switch to SCPI PAGE mode (native 4155C/4156C SCPI subset)
+        pspa.write(":PAGE")
+        time.sleep(0.5)
+        print("Switched to PAGE (SCPI) mode for plot display.")
+    except Exception as e:
+        print(f"Warning: Could not switch to plot page: {e}")
+
+def configure_plot_display(pspa, y_scale="LINEAR", title="I-V Curve"):
+    """
+    Configure plot display axes and appearance.
+    
+    Args:
+        y_scale: "LINEAR" or "LOG" for Y-axis (current) scale
+        title: Display title on instrument (currently not settable, for reference)
+    """
+    try:
+        # Set Y-axis scale: LOG for better range visibility, LINEAR for direct I values
+        scale_cmd = "LOG" if y_scale.upper() == "LOG" else "LIN"
+        pspa.write(f":PAGE:DISP:GRAP:Y:SCAL {scale_cmd}")
+        
+        # Enable automatic scaling on graph insert (ZCAN = Zero-Center Auto-scale)
+        pspa.write(":PAGE:MEAS:MSET:ZCAN ON")
+        
+        print(f"Plot display configured: Y-axis={scale_cmd}, auto-scale enabled")
+    except Exception as e:
+        print(f"Warning: Could not configure plot display: {e}")
+
+def refresh_plot(pspa):
+    """
+    Refresh and auto-scale the plot display on the instrument screen.
+    Call this after adding a batch of data points to update the visible graph.
+    """
+    try:
+        # Auto-scale graph once (GLIS:SCAL = Graph List Scaling)
+        pspa.write(":PAGE:GLIS:SCAL:AUTO ONCE")
+        time.sleep(0.2)
+    except Exception as e:
+        print(f"Warning: Could not refresh plot: {e}")
+
+def switch_back_to_flex(pspa):
+    """
+    Switch back from PAGE (SCPI) mode to FLEX mode for measurements.
+    Must be called before attempting more FLEX commands.
+    """
+    try:
+        pspa.write("US")
+        pspa.write("FMT 1")
+        time.sleep(0.3)
+        print("Switched back to FLEX mode.")
+    except Exception as e:
+        print(f"Warning: Could not switch back to FLEX: {e}")
 
 
 # =============================
@@ -241,6 +381,46 @@ def validate_step(step):
     if step == 0:
         raise ValueError("Step must be non-zero")
     return step
+
+def normalize_integration_time(time_setting):
+    """Normalize user-friendly integration time inputs to SHOR/MED/LONG."""
+    if time_setting is None:
+        return "MED"
+
+    token = str(time_setting).strip().upper()
+    mapping = {
+        "S": "SHOR",
+        "SHOR": "SHOR",
+        "SHORT": "SHOR",
+        "M": "MED",
+        "MED": "MED",
+        "MEDIUM": "MED",
+        "L": "LONG",
+        "LONG": "LONG",
+    }
+    return mapping.get(token, "MED")
+
+def set_integration_time(pspa, time_setting="MED"):
+    """
+    Set PSPA integration time for spot measurements.
+
+    Args:
+        time_setting: Accepts SHOR/MED/LONG and aliases S/M/L, SHORT/MEDIUM.
+    """
+    global INTEGRATION_TIME
+    setting = normalize_integration_time(time_setting)
+
+    # MATLAB reference uses :PAGE:MEAS:MSET:ITIM {SHOR|MED|LONG}.
+    # Re-enter FLEX mode afterwards because this driver operates primarily in FLEX.
+    try:
+        pspa.write(f":PAGE:MEAS:MSET:ITIM {setting}")
+        pspa.write("US")
+        pspa.write("FMT 1")
+    except Exception as e:
+        print(f"Warning: failed to set integration time on instrument ({e}).")
+
+    INTEGRATION_TIME = setting
+    return setting
 
 def sweep_values(start: float, stop: float, step: float) -> np.ndarray:
     """Generate sweep values from start to stop with given step."""
@@ -396,13 +576,28 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
 #   Unidirectional: 0 → V_max  (simple ramp)
 #   Bidirectional:  0 → +V_max → -V_max → 0  (detects hysteresis)
 
-def measure_iv_curve(pspa, v_start, v_stop, v_step, channel=1, compliance=0.1):
+def measure_iv_curve(pspa, v_start, v_stop, v_step, channel=1, compliance=0.1,
+                     ground_ch=None, integration_time="MED", enable_plot=True):
     # Validate inputs
     validate_channel(channel)
     validate_compliance(compliance)
     validate_step(v_step)
+    if ground_ch is not None:
+        validate_channel(ground_ch)
+
+    set_integration_time(pspa, integration_time)
+    
+    # Setup plot display ONCE at start (stay in PAGE mode briefly, then return to FLEX)
+    if enable_plot:
+        goto_plot_page(pspa)
+        configure_plot_display(pspa, y_scale="LINEAR")
+        switch_back_to_flex(pspa)
     
     configure_smu(pspa, channel, mode='VOLT', compliance=compliance)
+    if ground_ch is not None:
+        configure_smu(pspa, ground_ch, mode='VOLT', compliance=compliance)
+        set_voltage(pspa, ground_ch, 0)
+        pspa.write(f"CN {channel},{ground_ch}")
     output_on(pspa, channel)
     
     voltage_array = []
@@ -410,13 +605,26 @@ def measure_iv_curve(pspa, v_start, v_stop, v_step, channel=1, compliance=0.1):
 
     voltages = sweep_values(v_start, v_stop, v_step)
 
+    # Collect all data in FLEX mode (no mode switching during sweep)
     for v in voltages:
         set_voltage(pspa, channel, v)
         i_val = measure_channel_current(pspa, channel)
         voltage_array.append(v)
         current_array.append(i_val)
     
-    output_off(pspa, channel)
+    if ground_ch is not None:
+        pspa.write("CL")
+    else:
+        output_off(pspa, channel)
+    
+    # Final plot refresh after all data collected (one time in PAGE mode)
+    if enable_plot:
+        try:
+            goto_plot_page(pspa)
+            refresh_plot(pspa)
+            switch_back_to_flex(pspa)
+        except Exception as e:
+            print(f"Final plot update warning: {e}")
     
     # Convert to numpy arrays
     voltage_array = np.array(voltage_array)
@@ -424,19 +632,34 @@ def measure_iv_curve(pspa, v_start, v_stop, v_step, channel=1, compliance=0.1):
     
     # Remove first 0V datapoint and any near-zero points from startup
     # Keep only points where we've actually applied meaningful voltage
-    mask = np.abs(voltage_array) >= 1e-6  # Filter out near-zero voltages
-    voltage_array = voltage_array[mask]
-    current_array = current_array[mask]
+    # mask = np.abs(voltage_array) >= 1e-6  # Filter out near-zero voltages
+    # voltage_array = voltage_array[mask]
+    # current_array = current_array[mask]
     
     return {'Voltage': voltage_array, 'Current': current_array}
 
-def measure_iv_bidirectional(pspa, v_max, v_step, channel=1, compliance=0.1):
+def measure_iv_bidirectional(pspa, v_max, v_step, channel=1, compliance=0.1,
+                             ground_ch=None, integration_time="MED", enable_plot=True):
     # Validate inputs
     validate_channel(channel)
     validate_compliance(compliance)
     validate_step(v_step)
+    if ground_ch is not None:
+        validate_channel(ground_ch)
+
+    set_integration_time(pspa, integration_time)
+    
+    # Setup plot display ONCE at start (stay in PAGE mode briefly, then return to FLEX)
+    if enable_plot:
+        goto_plot_page(pspa)
+        configure_plot_display(pspa, y_scale="LINEAR")
+        switch_back_to_flex(pspa)
     
     configure_smu(pspa, channel, mode='VOLT', compliance=compliance)
+    if ground_ch is not None:
+        configure_smu(pspa, ground_ch, mode='VOLT', compliance=compliance)
+        set_voltage(pspa, ground_ch, 0)
+        pspa.write(f"CN {channel},{ground_ch}")
     output_on(pspa, channel)
     
     voltage_array = []
@@ -447,13 +670,26 @@ def measure_iv_bidirectional(pspa, v_max, v_step, channel=1, compliance=0.1):
     back = sweep_values(-v_max + v_step, 0, v_step)
     sweep = np.concatenate([up, down, back])
     
+    # Collect all data in FLEX mode (no mode switching during sweep)
     for v in sweep:
         set_voltage(pspa, channel, v)
         i_val = measure_channel_current(pspa, channel)
         voltage_array.append(v)
         current_array.append(i_val)
     
-    output_off(pspa, channel)
+    if ground_ch is not None:
+        pspa.write("CL")
+    else:
+        output_off(pspa, channel)
+    
+    # Final plot refresh after all data collected (one time in PAGE mode)
+    if enable_plot:
+        try:
+            goto_plot_page(pspa)
+            refresh_plot(pspa)
+            switch_back_to_flex(pspa)
+        except Exception as e:
+            print(f"Final plot update warning: {e}")
     
     # Convert to numpy arrays
     voltage_array = np.array(voltage_array)
@@ -461,9 +697,9 @@ def measure_iv_bidirectional(pspa, v_max, v_step, channel=1, compliance=0.1):
     
     # Remove first 0V datapoint and any near-zero points from startup
     # Keep only points where we've actually applied meaningful voltage
-    mask = np.abs(voltage_array) >= 1e-6  # Filter out near-zero voltages
-    voltage_array = voltage_array[mask]
-    current_array = current_array[mask]
+    # mask = np.abs(voltage_array) >= 1e-6  # Filter out near-zero voltages
+    # voltage_array = voltage_array[mask]
+    # current_array = current_array[mask]
     
     return {'Voltage': voltage_array, 'Current': current_array}
 

@@ -1,0 +1,194 @@
+    %Notice: Maximum number of points = 1,000
+%Maximum number of cycles = 1,000/N STEPS
+clear
+% Create GPIB object.
+obj1 = visadev("GPIB0::16::INSTR")
+
+% Configure visa settings
+obj1.Timeout = 10000;
+configureTerminator(obj1,"LF");
+
+% Reset device
+writeline(obj1, '*RST');
+
+% Communicating with instrument object, obj1.
+writeline(obj1, ':PAGE:CHAN:SMU1:MODE I');
+writeline(obj1, ':PAGE:CHAN:SMU1:FUNC CONS');
+writeline(obj1, ':PAGE:CHAN:SMU3:DIS');
+writeline(obj1, ':PAGE:CHAN:SMU4:DIS');
+writeline(obj1, ':PAGE:CHAN:VSU1:DIS');
+writeline(obj1, ':PAGE:CHAN:VSU2:DIS');
+writeline(obj1, ':PAGE:CHAN:VMU1:DIS');
+writeline(obj1, ':PAGE:CHAN:VMU2:DIS');
+writeline(obj1, ':PAGE:CHAN:SMU2:MODE V');
+writeline(obj1, ':PAGE:CHAN:SMU2:FUNC VAR1');
+writeline(obj1, ':PAGE:DISP:GRAP:Y:SCAL LOG');
+writeline(obj1, ':PAGE:MEAS:MSET:ZCAN ON');
+writeline(obj1, ':PAGE:MEAS:MSET:SMU1:RANG:MODE FIX');
+writeline(obj1, ':PAGE:MEAS:MSET:SMU2:RANG:MODE AUTO');
+
+%Enter Forming Voltage
+prompt = {'Enter Forming Voltage (V)'};
+dlg_title = 'V form';
+num_lines = 1;
+def = {'0'};
+answer = inputdlg(prompt,dlg_title,num_lines,def);
+V_form = str2double(answer{1});
+V_form2 = 0;
+
+%Enter the value of voltage and voltage step
+prompt = {'Enter Amplitude (V)'};
+dlg_title = 'V max';
+num_lines = 1;
+def = {'0.8'};
+answer = inputdlg(prompt,dlg_title,num_lines,def);
+V_stop = str2double(answer{1});
+V_stop2 = -0.8;
+
+prompt = {'Enter Voltage Step'};
+dlg_title = 'STEP V Sweep';
+num_lines = 1;
+def = {'0.01'};
+answer = inputdlg(prompt,dlg_title,num_lines,def);
+V_step = abs(str2double(answer{1}));
+if V_stop < 0
+    V_step = -0.1*V_step;
+end
+V_step2 = -1*V_step;
+%Enter compliance current
+prompt = {'Enter compliance current (A)'};
+dlg_title = 'Compliance current';
+num_lines = 1;
+def = {'0.00015'};
+answer = inputdlg(prompt,dlg_title,num_lines,def);
+Icompl = abs(str2double(answer{1}));
+
+%Define integration time"
+prompt = {'Integ. Time: Short = S, Medium = M, Long = L'};
+dlg_title = 'Int. Time';
+num_lines = 1;
+def = {'M'};
+answer = inputdlg(prompt,dlg_title,num_lines,def);
+It=cell2mat(answer);
+if strcmp('L',It)
+    writeline(obj1, ':PAGE:MEAS:MSET:ITIM LONG');
+end
+if strcmp('M',It)
+   writeline(obj1, ':PAGE:MEAS:MSET:ITIM MED');
+end
+if strcmp('S',It)
+   writeline(obj1, ':PAGE:MEAS:MSET:ITIM SHOR');
+end
+
+%Enter number of cycles
+prompt = {'Enter number cycles'};
+dlg_title = 'Number of cycles';
+num_lines = 1;
+def = {'1'};
+answer = inputdlg(prompt,dlg_title,num_lines,def);
+N_cycles = str2double(answer{1});
+N_cicles = 10;
+if N_cycles > 10
+    N_cicles = 10;
+end
+%Based on step, define number of maximum repitions
+Nsteps= abs(2*V_stop/V_step)+1;
+maxrep= fix(1000/Nsteps);
+if maxrep > 10 
+    N_cicles = 10;
+end
+if N_cycles < N_cicles 
+    N_cicles = N_cycles;
+end
+
+% write forming voltage
+writeline(obj1, ':PAGE:MEAS:VAR1:MODE SINGLE');
+writeline(obj1, ':PAGE:MEAS:VAR1:SPAC LIN');
+writeline(obj1, ':PAGE:MEAS:VAR1:START 0');
+writeline(obj1,append(':PAGE:MEAS:VAR1:STOP ',num2str(V_form)));
+writeline(obj1, append(':PAGE:MEAS:VAR1:STEP ',num2str(V_step)));
+writeline(obj1,append(':PAGE:MEAS:VAR1:COMP ',num2str(Icompl)));
+% measure
+writeline(obj1, ':PAGE:SCON:MEAS:SING');
+writeline(obj1, '*OPC');
+data1 = writeread(obj1, '*OPC?');
+
+for i=1:N_cicles
+%Code to create the cycle
+writeline(obj1, ':PAGE:MEAS:VAR1:MODE DOUBLE');
+writeline(obj1, ':PAGE:MEAS:VAR1:SPAC LIN');
+writeline(obj1, ':PAGE:MEAS:VAR1:START 0');
+writeline(obj1,append(':PAGE:MEAS:VAR1:STOP ',num2str(V_stop)));
+writeline(obj1, append(':PAGE:MEAS:VAR1:STEP ',num2str(V_step)));
+writeline(obj1,append(':PAGE:MEAS:VAR1:COMP ',num2str(Icompl)));
+%Start clock
+time_start = clock;
+%Start measuring
+writeline(obj1, ':PAGE:SCON:MEAS:SING');
+writeline(obj1, '*OPC');
+data1 = append(data1, writeread(obj1, '*OPC?'));
+
+writeline(obj1, ':PAGE:GLIS:SCAL:AUTO ONCE');
+writeline(obj1, append(':PAGE:MEAS:VAR1:STOP ',num2str(V_stop2)));
+writeline(obj1, append(':PAGE:MEAS:VAR1:STEP ',num2str(V_step2)));
+writeline(obj1, ':PAGE:SCON:MEAS:APPEND');
+writeline(obj1, '*OPC');
+data1 = append(data1, writeread(obj1, '*OPC?'));
+
+%Stop clock
+time_stop = clock;
+%Write data
+dados_v{i}= writeread(obj1, ':TRAC:DATA? V2');
+dados_i{i}= writeread(obj1, ':TRAC:DATA? I2');
+fprintf(obj1, '*OPC');
+data1 = append(data1, writeread(obj1, '*OPC?'));
+writeline(obj1, ':PAGE:GLIS:SCAL:AUTO ONCE');
+end
+
+% Disconnect from instrument object, obj1.
+clear obj1
+
+voltstotal=' ';
+amptotal=' ';
+for i=1:N_cicles
+% Write data to file
+voltstotal=strcat(voltstotal,dados_v{i},',');
+amptotal=strcat(amptotal,dados_i{i},',');
+end
+numeros=str2num(voltstotal);
+ volts = transpose(numeros);
+numeros2=str2num(amptotal);
+ corrent = transpose(numeros2);
+  %Obtain vector size
+ a=size(corrent);
+ s=a(1);
+ 
+%Calculate elapsed time
+Ti=time_start(4)*3600+time_start(5)*60+time_start(6);
+Tf=time_stop(4)*3600+time_stop(5)*60+time_stop(6);
+periodo = abs(Tf-Ti);
+%dt=period/step;
+dt=periodo/(2*Nsteps);%Multiply by 2 to divide in half to be done in two steps
+Fluxoi =0;
+Cargai =0;
+
+%Enter file name
+prompt = {'Enter file name'};
+dlg_title = 'V-I_curve_#';
+
+
+num_lines = 1;
+def = {'V-I_curve_'};
+answer = inputdlg(prompt,dlg_title,num_lines,def);
+a=cell2mat(answer);
+s2=strcat('D:\Weebit Nano.', a,'.txt');
+fid = fopen(s2,'wt'); 
+fprintf(fid,'Time(s) \t Voltage(V) \t  Current(A) \t  Flux(Wb) \t Charge(C) \n');
+ for C = 1:s
+     Fluxo(C)= volts(C)*dt + Fluxoi; 
+     Fluxoi=Fluxo(C);
+     Carga(C)= corrent(C)*dt + Cargai; 
+     Cargai = Carga(C);
+fprintf(fid,'%f \t %f \t %e \t %e \t  %e\n',(C-1)*dt,volts(C),corrent(C),Fluxo(C),Carga(C));
+ end
+   fclose(fid);
