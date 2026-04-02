@@ -64,7 +64,12 @@ def _pia_safe_close(inst):
 # defined in measurements_config.py.
 
 def execute_pia_gui(choice, params):
-    """Execute a PIA measurement using GUI-provided params (no input() calls)."""
+    """Execute a PIA measurement using GUI-provided params (no input() calls).
+    
+    Returns:
+        List of image file paths that were generated.
+    """
+    image_paths = []
 
     if choice in (1, 2):
         # Impedance Magnitude (1) or Phase (2) vs Frequency
@@ -84,9 +89,9 @@ def execute_pia_gui(choice, params):
             y_data = z_mag if choice == 1 else theta_deg
             title = "Impedance Magnitude vs Frequency" if choice == 1 else "Impedance Phase vs Frequency"
 
-            file_management.save_image(
+            image_paths.append(file_management.save_image(
                 title, "Frequency (Hz)", freq_axis, y_label, y_data,
-                APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
+                APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v))
 
             z_real = z_mag * np.cos(np.deg2rad(theta_deg))
             z_imag = z_mag * np.sin(np.deg2rad(theta_deg))
@@ -248,6 +253,9 @@ def execute_pia_gui(choice, params):
 
     else:
         raise ValueError(f"Unknown PIA measurement index: {choice}")
+    
+    # Return the path to the most recently saved image
+    return file_management.get_latest_image()
 
 
 # =============================
@@ -333,10 +341,12 @@ def execute_pspa_gui(choice, params):
         v_step = float(params.get("v_step", 0.1))
         compliance = float(params.get("compliance", 0.1))
         channel = int(float(params.get("channel", 1)))
-        ground_ch = int(float(params.get("ground_ch", 2)))
+        integration_time = str(params.get("integration_time", "MED"))
 
         with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
-            data = pspa.measure_iv_curve(inst, v_start, v_stop, v_step, channel, compliance, ground_ch)
+            data = pspa.measure_iv_curve(
+                inst, v_start, v_stop, v_step, channel, compliance,
+                integration_time=integration_time)
             file_management.save_csv("iv_curve.csv",
                 np.column_stack([data['Voltage'], data['Current']]),
                 "Voltage_V, Current_A")
@@ -353,10 +363,12 @@ def execute_pspa_gui(choice, params):
         v_step = float(params.get("v_step", 0.1))
         compliance = float(params.get("compliance", 0.1))
         channel = int(float(params.get("channel", 1)))
-        ground_ch = int(float(params.get("ground_ch", 2)))
+        integration_time = str(params.get("integration_time", "MED"))
 
         with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
-            data = pspa.measure_iv_bidirectional(inst, v_max, v_step, channel, compliance, ground_ch)
+            data = pspa.measure_iv_bidirectional(
+                inst, v_max, v_step, channel, compliance,
+                integration_time=integration_time)
             file_management.save_csv("iv_curve_bidirectional.csv",
                 np.column_stack([data['Voltage'], data['Current']]),
                 "Voltage_V, Current_A")
@@ -499,15 +511,15 @@ def execute_pspa_gui(choice, params):
     elif choice == 10:
         # Resistance Measurement (Kelvin two-SMU)
         i_start = float(params.get("i_start", 0))
-        i_stop = float(params.get("i_stop", 1e-3))
-        i_step = float(params.get("i_step", 1e-4))
+        i_stop = float(params.get("i_stop", 1e-4))
+        i_step = float(params.get("i_step", 1e-5))
         compliance = float(params.get("compliance", 10.0))
-        force_ch = int(float(params.get("force_ch", 1)))
-        sense_ch = int(float(params.get("sense_ch", 2)))
+        channel = int(float(params.get("channel", 1)))
+        sense_channel = int(float(params.get("sense_channel", channel)))
 
         with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
             data = pspa.measure_resistance(
-                inst, i_start, i_stop, i_step, force_ch, sense_ch, compliance)
+                inst, i_start, i_stop, i_step, channel, compliance, sense_channel=sense_channel)
             file_management.save_csv("resistance.csv",
                 np.column_stack([data['Current'], data['Voltage']]),
                 "Current_A, Voltage_V")
@@ -520,6 +532,9 @@ def execute_pspa_gui(choice, params):
 
     else:
         raise ValueError(f"Unknown PSPA measurement index: {choice}")
+    
+    # Return the path to the most recently saved image
+    return file_management.get_latest_image()
 
 
 # =============================
@@ -823,4 +838,6 @@ def execute_lcr_gui(choice, params):
             "(connect/disconnect DUT). Please use CLI mode (--cli) for this measurement.")
 
     else:
-        raise ValueError(f"Unknown LCR measurement index: {choice}")
+        raise ValueError(f"Unknown LCR measurement index: {choice}")    
+    # Return the path to the most recently saved image
+    return file_management.get_latest_image()

@@ -106,6 +106,7 @@ class MeasurementGUI:
         main_frame.rowconfigure(4, weight=1)  # Measurement selection
         main_frame.rowconfigure(5, weight=2)  # Parameters (largest)
         main_frame.rowconfigure(7, weight=1)  # Status
+        main_frame.rowconfigure(8, weight=2)  # Image display
 
         # --- Output Directory ---
         ttk.Label(main_frame, text="Output Directory:", font=("Arial", 10, "bold")).grid(
@@ -284,9 +285,25 @@ class MeasurementGUI:
         self.status_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         log_scrollbar.config(command=self.status_text.yview)
 
+        # --- Image Display Frame ---
+        ttk.Label(main_frame, text="Graph:", font=("Arial", 10, "bold")).grid(
+            row=8, column=0, sticky=(tk.W, tk.N), pady=(10, 5))
+        
+        image_frame = ttk.Frame(main_frame)
+        image_frame.grid(row=8, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 5))
+        image_frame.columnconfigure(0, weight=1)
+        image_frame.rowconfigure(0, weight=1)
+        
+        # Canvas for displaying images
+        self.image_canvas = tk.Canvas(image_frame, height=250, bg='white')
+        self.image_canvas.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Store PhotoImage to prevent garbage collection
+        self.current_photo = None
+
         # --- Buttons Frame ---
         button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
+        button_frame.grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
         button_frame.columnconfigure(1, weight=1)
         
         self.run_btn = ttk.Button(button_frame, text="Run Measurement", command=self.run_measurement)
@@ -679,6 +696,47 @@ class MeasurementGUI:
         # Schedule on main thread if called from a background thread
         self.root.after(0, _update)
 
+    def display_image(self, image_path):
+        """Display an image from a file path on the image canvas (thread-safe)."""
+        def _display():
+            try:
+                from PIL import Image, ImageTk
+                
+                # Load image
+                img = Image.open(image_path)
+                
+                # Get canvas dimensions
+                canvas_width = self.image_canvas.winfo_width()
+                canvas_height = self.image_canvas.winfo_height()
+                
+                # If canvas hasn't been rendered yet, use default size
+                if canvas_width <= 1:
+                    canvas_width = 600
+                if canvas_height <= 1:
+                    canvas_height = 250
+                
+                # Resize image to fit canvas while maintaining aspect ratio
+                img.thumbnail((canvas_width - 10, canvas_height - 10), Image.Resampling.LANCZOS)
+                
+                # Convert to PhotoImage
+                self.current_photo = ImageTk.PhotoImage(img)
+                
+                # Clear canvas and display image
+                self.image_canvas.delete("all")
+                self.image_canvas.create_image(
+                    canvas_width // 2, canvas_height // 2,
+                    image=self.current_photo
+                )
+            except Exception as e:
+                log.error(f"Failed to display image: {e}")
+                self.image_canvas.delete("all")
+                self.image_canvas.create_text(
+                    300, 125, text=f"Failed to load image:\n{str(e)}", fill='red'
+                )
+        
+        # Schedule on main thread if called from a background thread
+        self.root.after(0, _display)
+
     def run_measurement(self):
         """Run the selected measurement in a separate thread."""
         try:
@@ -719,10 +777,16 @@ class MeasurementGUI:
         try:
             params = self.get_params_dict()
             
-            # Call the measurement executor
-            self.measurement_executor(instrument, measurement_idx, params)
+            # Call the measurement executor and capture returned image path
+            image_path = self.measurement_executor(instrument, measurement_idx, params)
             
             self.update_status(f"✓ Measurement completed: {measurement_name}")
+            
+            # Display the image if one was generated
+            if image_path:
+                self.display_image(image_path)
+                self.update_status(f"  Image saved to: {image_path}")
+            
             self.root.after(0, lambda: self.progress_var.set(100))
             
             # Reset after a delay
