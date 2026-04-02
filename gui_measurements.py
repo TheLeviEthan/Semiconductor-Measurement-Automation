@@ -333,9 +333,10 @@ def execute_pspa_gui(choice, params):
         v_step = float(params.get("v_step", 0.1))
         compliance = float(params.get("compliance", 0.1))
         channel = int(float(params.get("channel", 1)))
+        ground_ch = int(float(params.get("ground_ch", 2)))
 
         with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
-            data = pspa.measure_iv_curve(inst, v_start, v_stop, v_step, channel, compliance)
+            data = pspa.measure_iv_curve(inst, v_start, v_stop, v_step, channel, compliance, ground_ch)
             file_management.save_csv("iv_curve.csv",
                 np.column_stack([data['Voltage'], data['Current']]),
                 "Voltage_V, Current_A")
@@ -352,9 +353,10 @@ def execute_pspa_gui(choice, params):
         v_step = float(params.get("v_step", 0.1))
         compliance = float(params.get("compliance", 0.1))
         channel = int(float(params.get("channel", 1)))
+        ground_ch = int(float(params.get("ground_ch", 2)))
 
         with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
-            data = pspa.measure_iv_bidirectional(inst, v_max, v_step, channel, compliance)
+            data = pspa.measure_iv_bidirectional(inst, v_max, v_step, channel, compliance, ground_ch)
             file_management.save_csv("iv_curve_bidirectional.csv",
                 np.column_stack([data['Voltage'], data['Current']]),
                 "Voltage_V, Current_A")
@@ -495,16 +497,17 @@ def execute_pspa_gui(choice, params):
             file_management.save_plot("breakdown_voltage.png"); plt.close()
 
     elif choice == 10:
-        # Resistance Measurement
+        # Resistance Measurement (Kelvin two-SMU)
         i_start = float(params.get("i_start", 0))
         i_stop = float(params.get("i_stop", 1e-3))
         i_step = float(params.get("i_step", 1e-4))
         compliance = float(params.get("compliance", 10.0))
-        channel = int(float(params.get("channel", 1)))
+        force_ch = int(float(params.get("force_ch", 1)))
+        sense_ch = int(float(params.get("sense_ch", 2)))
 
         with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
             data = pspa.measure_resistance(
-                inst, i_start, i_stop, i_step, channel, compliance)
+                inst, i_start, i_stop, i_step, force_ch, sense_ch, compliance)
             file_management.save_csv("resistance.csv",
                 np.column_stack([data['Current'], data['Voltage']]),
                 "Current_A, Voltage_V")

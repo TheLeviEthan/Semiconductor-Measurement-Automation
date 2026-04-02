@@ -396,14 +396,30 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
 #   Unidirectional: 0 → V_max  (simple ramp)
 #   Bidirectional:  0 → +V_max → -V_max → 0  (detects hysteresis)
 
-def measure_iv_curve(pspa, v_start, v_stop, v_step, channel=1, compliance=0.1):
+def measure_iv_curve(pspa, v_start, v_stop, v_step, channel=1, compliance=0.1,
+                     ground_ch=2):
+    """
+    Sweep voltage on *channel*, measure current.  A second SMU (*ground_ch*)
+    is clamped to 0 V to provide a proper ground-return path for two-probe
+    setups.  This prevents autorange artefacts and ensures the circuit is
+    complete even when the DUT is not connected to the instrument ground.
+    """
     # Validate inputs
     validate_channel(channel)
+    validate_channel(ground_ch)
     validate_compliance(compliance)
     validate_step(v_step)
+    if channel == ground_ch:
+        raise ValueError("channel and ground_ch must be different")
     
     configure_smu(pspa, channel, mode='VOLT', compliance=compliance)
-    output_on(pspa, channel)
+    configure_smu(pspa, ground_ch, mode='VOLT', compliance=compliance)
+    
+    # Clamp ground channel to 0 V — provides current return path
+    set_voltage(pspa, ground_ch, 0)
+    
+    # Enable both channels
+    pspa.write(f"CN {channel},{ground_ch}")
     
     voltage_array = []
     current_array = []
@@ -416,18 +432,33 @@ def measure_iv_curve(pspa, v_start, v_stop, v_step, channel=1, compliance=0.1):
         voltage_array.append(v)
         current_array.append(i_val)
     
-    output_off(pspa, channel)
+    # Disable all outputs
+    pspa.write("CL")
     
     return {'Voltage': np.array(voltage_array), 'Current': np.array(current_array)}
 
-def measure_iv_bidirectional(pspa, v_max, v_step, channel=1, compliance=0.1):
+def measure_iv_bidirectional(pspa, v_max, v_step, channel=1, compliance=0.1,
+                             ground_ch=2):
+    """
+    Bidirectional voltage sweep (0 → +V_max → −V_max → 0).  *ground_ch*
+    is clamped to 0 V as a current-return path for two-probe setups.
+    """
     # Validate inputs
     validate_channel(channel)
+    validate_channel(ground_ch)
     validate_compliance(compliance)
     validate_step(v_step)
+    if channel == ground_ch:
+        raise ValueError("channel and ground_ch must be different")
     
     configure_smu(pspa, channel, mode='VOLT', compliance=compliance)
-    output_on(pspa, channel)
+    configure_smu(pspa, ground_ch, mode='VOLT', compliance=compliance)
+    
+    # Clamp ground channel to 0 V
+    set_voltage(pspa, ground_ch, 0)
+    
+    # Enable both channels
+    pspa.write(f"CN {channel},{ground_ch}")
     
     voltage_array = []
     current_array = []
@@ -443,7 +474,8 @@ def measure_iv_bidirectional(pspa, v_max, v_step, channel=1, compliance=0.1):
         voltage_array.append(v)
         current_array.append(i_val)
     
-    output_off(pspa, channel)
+    # Disable all outputs
+    pspa.write("CL")
     
     return {'Voltage': np.array(voltage_array), 'Current': np.array(current_array)}
 
@@ -721,47 +753,69 @@ def measure_breakdown_voltage(pspa, v_start, v_stop, v_step, channel=1,
     }
 
 
-def measure_resistance(pspa, i_start, i_stop, i_step, channel=1,
-                       compliance=10.0):
+def measure_resistance(pspa, i_start, i_stop, i_step, force_ch=1,
+                       sense_ch=2, compliance=10.0):
     """
-    Force current, measure voltage → compute resistance.
+    Two-SMU Kelvin-style resistance measurement (force I, measure V).
 
-    Sweeps current through *channel*, measures voltage at each step.
-    Returns V, I arrays and the computed R (Ohm) via least-squares fit.
+    Uses *force_ch* to sweep current through the DUT and *sense_ch* as
+    a 0 V ground-return so the circuit is complete.  Voltage is measured
+    at *force_ch* (the high-side of the DUT), giving the true voltage
+    drop across the device.
+
+    This eliminates autorange artefacts and internal-SMU-drop errors
+    that occur when only a single SMU is used.
+
+    Args:
+        pspa:       Open VISA resource for the 4155C/4156C.
+        i_start:    Sweep start current (A).
+        i_stop:     Sweep stop current (A).
+        i_step:     Current step size (A).
+        force_ch:   SMU channel that forces current (default 1).
+        sense_ch:   SMU channel clamped to 0 V as ground return (default 2).
+        compliance: Voltage compliance for both channels (V, default 10).
 
     Returns:
         dict with keys 'Current' (A), 'Voltage' (V), and
-        'resistance_ohm' (float, slope of linear fit).
+        'resistance_ohm' (float, slope of least-squares linear fit).
     """
-    config_backup = SMU_CONFIG.get(channel, {}).copy()
-    configure_smu(pspa, channel, mode='CURR', compliance=compliance)
-    output_on(pspa, channel)
+    validate_channel(force_ch)
+    validate_channel(sense_ch)
+    if force_ch == sense_ch:
+        raise ValueError("force_ch and sense_ch must be different channels")
+
+    # Configure SMU roles
+    configure_smu(pspa, force_ch, mode='CURR', compliance=compliance)
+    configure_smu(pspa, sense_ch, mode='VOLT', compliance=compliance)
+
+    # Clamp sense channel to 0 V — acts as ground return / current sink
+    set_voltage(pspa, sense_ch, 0)
+
+    # Enable both channels together
+    pspa.write(f"CN {force_ch},{sense_ch}")
 
     currents_arr = sweep_values(i_start, i_stop, i_step)
     i_out = []
     v_out = []
 
-    print("Starting Resistance measurement (force I, measure V)...")
+    print(f"Starting Resistance measurement (force I on CH{force_ch}, "
+          f"ground return on CH{sense_ch})...")
     for i_val in currents_arr:
-        set_current(pspa, channel, i_val)
-        # For measuring voltage in FLEX we re-read the forced channel
-        # TV? is not standard on 4155C in FLEX; we use 'TI?' to read the
-        # compliance-side measurement and derive voltage from I * R.
-        # Alternate approach: use two channels (force I on ch1, measure V
-        # across ch1-ch2).  Here we approximate with DI + TI.
-        v_str = pspa.query(f"TV? {channel},0")
+        set_current(pspa, force_ch, i_val)
+        time.sleep(0.01)  # settling time for high-R devices
+        # Read voltage at the forcing channel — this is the DUT voltage
+        # since sense_ch is clamped at 0 V.
+        v_str = pspa.query(f"TV? {force_ch},0")
         v_val = parse_flex_number(v_str)
         i_out.append(i_val)
         v_out.append(v_val)
 
-    output_off(pspa, channel)
-    # Restore prior config
-    if config_backup:
-        SMU_CONFIG[channel] = config_backup
+    # Disable all outputs
+    pspa.write("CL")
 
     i_arr = np.array(i_out)
     v_arr = np.array(v_out)
-    # Least-squares linear fit R = ΔV / ΔI
+    # Least-squares linear fit: R = ΔV / ΔI
     if len(i_arr) > 1:
         coeffs = np.polyfit(i_arr, v_arr, 1)
         resistance = coeffs[0]
