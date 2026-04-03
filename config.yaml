@@ -48,3 +48,16 @@ logging:
   level: "INFO"              # DEBUG, INFO, WARNING, ERROR
   log_to_file: true
   log_filename: "measurement.log"
+
+# --- USB switchover box (multiplexer) ---
+usb_switchbox:
+  enabled: false
+  port: "COM__PLACEHOLDER__"      # COM port of USB-to-RS422 adapter connected to Model 7197
+  baudrate: 9600
+  timeout_s: 2.0
+  write_terminator: ""            # M7197 manual: do NOT press Enter at end of command
+  read_response: true
+  command_map:
+    PIA:  "CTRL_A"                # Replace with actual position mapping for your wiring
+    PSPA: "CTRL_B"
+    LCR:  "CTRL_C"

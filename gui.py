@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mea
 
 import file_management
 import logging_config
+import usb_switchbox
 from measurements_config import (
     PIA_MEASUREMENTS, PSPA_MEASUREMENTS, LCR_MEASUREMENTS,
     MEASUREMENT_PARAMS, get_measurements_list,
@@ -79,10 +80,19 @@ class MeasurementGUI:
         # Track cryo state and measurement queue
         self.cryo_enabled = False
         self.measurement_queue = []
+
+        # USB switchbox (multiplexer) control
+        self.switchbox = usb_switchbox.create_switchbox_from_config()
+        self.switchbox_enabled_var = tk.BooleanVar(value=self.switchbox.enabled)
+        self.switchbox_status_var = tk.StringVar()
         
         self.create_widgets()
         self.toggle_cryo_params()  # Hide cryo UI initially
         self.update_measurement_list()
+        self.update_switchbox_status()
+        if self.switchbox_enabled_var.get():
+            self.switch_now_from_selection(raise_on_error=False)
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def create_widgets(self):
         """Build all visual elements of the window (labels, buttons, text fields, etc.)."""
@@ -168,9 +178,33 @@ class MeasurementGUI:
         for label, value in instruments:
             rb = ttk.Radiobutton(
                 instrument_frame, text=label, variable=self.instrument_var,
-                value=value, command=self.update_measurement_list
+                value=value, command=self.on_instrument_changed
             )
             rb.pack(anchor=tk.W)
+
+        switchbox_frame = ttk.LabelFrame(instrument_frame, text="USB Switchbox", padding="8")
+        switchbox_frame.pack(fill=tk.X, pady=(8, 0))
+
+        switchbox_enable = ttk.Checkbutton(
+            switchbox_frame,
+            text="Enable automatic routing",
+            variable=self.switchbox_enabled_var,
+            command=self.on_switchbox_toggle,
+        )
+        switchbox_enable.grid(row=0, column=0, sticky=tk.W)
+
+        switch_now_btn = ttk.Button(
+            switchbox_frame,
+            text="Switch Now",
+            command=self.switch_now_from_selection,
+        )
+        switch_now_btn.grid(row=0, column=1, sticky=tk.E, padx=(10, 0))
+
+        self.switchbox_status_label = ttk.Label(
+            switchbox_frame,
+            textvariable=self.switchbox_status_var,
+        )
+        self.switchbox_status_label.grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
 
         # --- Measurement Selection ---
         ttk.Label(main_frame, text="Measurement:", font=("Arial", 10, "bold")).grid(
@@ -294,8 +328,66 @@ class MeasurementGUI:
         progress = ttk.Progressbar(button_frame, variable=self.progress_var, maximum=100)
         progress.grid(row=0, column=3, sticky=(tk.W, tk.E), padx=(0, 5))
         
-        exit_btn = ttk.Button(button_frame, text="Exit", command=self.root.quit)
+        exit_btn = ttk.Button(button_frame, text="Exit", command=self.on_close)
         exit_btn.grid(row=0, column=4)
+
+    def update_switchbox_status(self, extra_text=""):
+        """Refresh switchbox status text in GUI."""
+        state = "Enabled" if self.switchbox_enabled_var.get() else "Disabled"
+        port = self.switchbox.settings.port
+        base = f"Status: {state} | Port: {port}"
+        if extra_text:
+            base = f"{base} | {extra_text}"
+        self.switchbox_status_var.set(base)
+
+    def on_switchbox_toggle(self):
+        """Enable/disable switchbox use from GUI checkbox."""
+        enabled = self.switchbox_enabled_var.get()
+        self.switchbox.set_enabled(enabled)
+        if not enabled:
+            self.switchbox.close()
+            self.update_switchbox_status("Routing inactive")
+            self.update_status("USB switchbox disabled")
+            return
+
+        self.update_switchbox_status("Routing active")
+        self.update_status("USB switchbox enabled")
+        self.switch_now_from_selection(raise_on_error=False)
+
+    def on_instrument_changed(self):
+        """Refresh measurements and auto-route switchbox when instrument changes."""
+        self.update_measurement_list()
+        self.switch_now_from_selection(raise_on_error=False)
+
+    def switch_now_from_selection(self, raise_on_error=False):
+        """Route switchbox to currently selected instrument."""
+        instrument = self.instrument_var.get()
+        self.route_switchbox(instrument, raise_on_error=raise_on_error)
+
+    def route_switchbox(self, instrument, raise_on_error=True):
+        """Route USB switchbox to the requested instrument if enabled."""
+        if not self.switchbox_enabled_var.get():
+            return
+
+        self.switchbox.set_enabled(True)
+        try:
+            message = self.switchbox.switch_to_instrument(instrument)
+            self.update_status(message)
+            self.update_switchbox_status(f"Routed to {instrument}")
+        except Exception as e:
+            error_msg = f"Switchbox routing failed for {instrument}: {e}"
+            self.update_status(error_msg)
+            self.update_switchbox_status("Routing error")
+            if raise_on_error:
+                raise RuntimeError(error_msg)
+
+    def on_close(self):
+        """Cleanup resources before closing the GUI."""
+        try:
+            self.switchbox.close()
+        except Exception:
+            pass
+        self.root.destroy()
 
     def populate_default_params(self):
         """Populate parameter frame with default parameters based on selected measurement."""
@@ -531,6 +623,7 @@ class MeasurementGUI:
                     for m_idx, (instrument, meas_idx, meas_name, meas_params) in enumerate(self.measurement_queue, 1):
                         self.update_status(f"  [{m_idx}/{n_meas}] {meas_name}...")
                         try:
+                            self.route_switchbox(instrument, raise_on_error=True)
                             if instrument == "PIA":
                                 execute_pia_gui(meas_idx, meas_params)
                             elif instrument == "PSPA":
@@ -651,6 +744,8 @@ class MeasurementGUI:
             instrument = self.instrument_var.get()
             measurement_idx, measurement_name = self.get_selected_measurement()
             output_dir = self.output_dir_var.get()
+
+            self.route_switchbox(instrument, raise_on_error=True)
 
             # Set output directory
             file_management.set_output_dir(output_dir)

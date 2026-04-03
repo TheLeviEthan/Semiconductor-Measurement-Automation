@@ -580,6 +580,7 @@ def measure_iv_curve(pspa, v_start, v_stop, v_step, channel=1, compliance=0.1,
                      ground_ch=None, integration_time="MED", enable_plot=True):
     # Validate inputs
     validate_channel(channel)
+    validate_channel(ground_ch)
     validate_compliance(compliance)
     validate_step(v_step)
     if ground_ch is not None:
@@ -642,6 +643,7 @@ def measure_iv_bidirectional(pspa, v_max, v_step, channel=1, compliance=0.1,
                              ground_ch=None, integration_time="MED", enable_plot=True):
     # Validate inputs
     validate_channel(channel)
+    validate_channel(ground_ch)
     validate_compliance(compliance)
     validate_step(v_step)
     if ground_ch is not None:
@@ -1022,7 +1024,7 @@ def measure_resistance(pspa, i_start, i_stop, i_step, channel=1,
 
     Returns:
         dict with keys 'Current' (A), 'Voltage' (V), and
-        'resistance_ohm' (float, slope of linear fit).
+        'resistance_ohm' (float, slope of least-squares linear fit).
     """
     # Default to same channel if sense_channel not specified
     if sense_channel is None:

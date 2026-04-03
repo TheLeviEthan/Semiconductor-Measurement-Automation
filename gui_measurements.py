@@ -509,7 +509,7 @@ def execute_pspa_gui(choice, params):
             file_management.save_plot("breakdown_voltage.png"); plt.close()
 
     elif choice == 10:
-        # Resistance Measurement
+        # Resistance Measurement (Kelvin two-SMU)
         i_start = float(params.get("i_start", 0))
         i_stop = float(params.get("i_stop", 1e-4))
         i_step = float(params.get("i_step", 1e-5))
