@@ -19,8 +19,6 @@ This file is intentionally very short.  All it does is:
   3. Hand off control to gui.py (GUI mode) or cli.py (CLI mode).
 """
 
-
-
 # TODO: add check to confirm measurements before proceding, DO YOU KNOW WHAT YOU'RE DOING
 import os
 import sys
@@ -79,8 +77,6 @@ def gui_execute_measurement(instrument, measurement_idx, params):
     except Exception as e:
         log.error("Measurement failed: %s", e)
         raise
-
-
 
 def main():
     """Main entry point for the measurement automation system."""

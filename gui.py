@@ -47,7 +47,6 @@ from measurements_config import (
 
 log = logging.getLogger(__name__)
 
-
 class HoverTooltip:
     """Small semi-transparent tooltip that appears after a short hover delay."""
 

@@ -94,8 +94,8 @@ LCR_MEASUREMENTS = [
 #
 # Maps (instrument, measurement_idx) to [(label, key, default_value), ...]
 
-PIA_OSCILLATOR_FIELD = ("Oscillator Level (Vrms)", "osc_voltage_v", "0.5")
-PIA_IMPEDANCE_OSCILLATOR_FIELD = ("Oscillator Level (Vrms)", "osc_voltage_v", "0.1")
+PIA_OSCILLATOR_FIELD = ("Oscillation Voltage (V)", "osc_voltage_v", "0.5")
+PIA_IMPEDANCE_OSCILLATOR_FIELD = ("Impedance Oscillation Voltage (V)", "osc_voltage_v", "0.1")
 
 MEASUREMENT_HELP = {
     ("PIA", 1): "Measures impedance magnitude and phase versus frequency to show the device's impedance response.",
