@@ -41,6 +41,7 @@ log = logging.getLogger(__name__)
 # User settings and constants
 # =============================
 GPIB_ADDRESS = "GPIB0::16::INSTR"   # Default GPIB address for the PSPA
+DEFAULT_TIMEOUT_MS = 120000
 
 # Global state to track how each SMU channel is configured.
 # Keys: Channel number (1-4)
@@ -100,7 +101,7 @@ def connect_pspa(gpib_address=None):
         rm = pyvisa.ResourceManager()
         print(f"Attempting to connect to: {gpib_address}")
         pspa = rm.open_resource(gpib_address)
-        pspa.timeout = 30000
+        pspa.timeout = DEFAULT_TIMEOUT_MS
         
         # Clear interface
         pspa.clear()
@@ -512,8 +513,8 @@ def measure_transistor_output_characteristics(pspa, vds_start, vds_stop, vds_ste
     print(f"{'='*70}")
     print(f"SMU Assignment: Drain=CH{drain_ch}, Gate=CH{gate_ch}, Source=CH{source_ch}")
     print(f"Measurement Config: FLEX spot reads (TI?), settle={settle_s:.3f}s")
-    print(f"Vds sweep: {vds_start}V → {vds_stop}V (step {vds_step}V)")
-    print(f"Vgs range: {vgs_start}V → {vgs_stop}V (step {vgs_step}V)")
+    print(f"Vds sweep: {vds_start}V -> {vds_stop}V (step {vds_step}V)")
+    print(f"Vgs range: {vgs_start}V -> {vgs_stop}V (step {vgs_step}V)")
     print(f"Compliance: {compliance} A")
     print(f"Starting Output Characteristics Sweep...")
     print(f"{'='*70}\n")
@@ -566,7 +567,7 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
     Sweeps Vgs from vgs_start -> vgs_stop (forward), then vgs_stop -> vgs_start
     (reverse) to capture switching hysteresis.
 
-    Returns dict with 'Vgs', 'Id', 'Ig', and 'Sweep_Direction' arrays.
+    Returns dict with 'Vgs', 'Id', and 'Sweep_Direction' arrays.
     'Sweep_Direction' contains 'forward' or 'reverse' for each data point.
     """
     # Validate inputs
@@ -600,7 +601,6 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
 
     vgs_array = []
     id_array = []
-    ig_array = []
     direction_array = []
 
     # Forward sweep: vgs_start -> vgs_stop
@@ -614,35 +614,31 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
     print(f"SMU Assignment: Drain=CH{drain_ch}, Gate=CH{gate_ch}, Source=CH{source_ch}")
     print(f"Measurement Config: Spot Mode (MM 1), Integration={integration_time}")
     print(f"Vds (constant): {vds_constant}V")
-    print(f"Vgs sweep: {vgs_start}V → {vgs_stop}V (step {vgs_step}V) - Bidirectional")
+    print(f"Vgs sweep: {vgs_start}V -> {vgs_stop}V (step {vgs_step}V) - Bidirectional")
     print(f"Compliance: {compliance} A")
     print(f"{'='*70}\n")
 
-    print(f"Forward sweep: {vgs_start}V → {vgs_stop}V : ", end="", flush=True)
+    print(f"Forward sweep: {vgs_start}V -> {vgs_stop}V : ", end="", flush=True)
     for vgs in forward_values:
         set_voltage(pspa, gate_ch, vgs)
 
-        id_val = measure_channel_current(pspa, drain_ch)
-        ig_val = measure_channel_current(pspa, gate_ch)
+        id_val = measure_channel_current(pspa, gate_ch)
 
         vgs_array.append(vgs)
         id_array.append(id_val)
-        ig_array.append(ig_val)
         direction_array.append('forward')
         print(".", end="", flush=True)
     
     print(f" [{len(forward_values)} points]")
 
-    print(f"Reverse sweep: {vgs_stop}V → {vgs_start}V : ", end="", flush=True)
+    print(f"Reverse sweep: {vgs_stop}V -> {vgs_start}V : ", end="", flush=True)
     for vgs in reverse_values:
         set_voltage(pspa, gate_ch, vgs)
 
-        id_val = measure_channel_current(pspa, drain_ch)
-        ig_val = measure_channel_current(pspa, gate_ch)
+        id_val = measure_channel_current(pspa, gate_ch)
 
         vgs_array.append(vgs)
         id_array.append(id_val)
-        ig_array.append(ig_val)
         direction_array.append('reverse')
         print(".", end="", flush=True)
     
@@ -652,7 +648,6 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
 
     vgs_np = np.array(vgs_array)
     id_np = np.array(id_array)
-    ig_np = np.array(ig_array)
     dir_np = np.array(direction_array)
 
     # Normalize Id polarity to positive drain current convention.
@@ -663,7 +658,6 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
     return {
         'Vgs': vgs_np,
         'Id': id_np,
-        'Ig': ig_np,
         'Sweep_Direction': dir_np
     }
 

@@ -114,7 +114,7 @@ def run_cryo_sweep(measurement_queue):
     print(f"\n{'='*60}")
     print("STARTING CRYOGENIC MEASUREMENT SWEEP")
     print(f"{'='*60}")
-    print("Temperature sweep : current temperature → target")
+    print("Temperature sweep : current temperature -> target")
     print(f"Target temperature: {end_temp:.1f}K")
     print(f"Ramp rate         : {ramp_rate:.2f} K/min")
     print(f"Measurement step  : {meas_interval:.2f} K")
@@ -140,7 +140,7 @@ def run_cryo_sweep(measurement_queue):
         temp_points = cryo.generate_temperature_sweep_points(start_temp, end_temp, meas_interval)
         n_temps = len(temp_points)
 
-        print(f"Temperature sweep : {temp_points[0]:.1f}K → {temp_points[-1]:.1f}K")
+        print(f"Temperature sweep : {temp_points[0]:.1f}K -> {temp_points[-1]:.1f}K")
         print(f"Temperature points: {n_temps}")
 
         for temp_idx, target_temp in enumerate(temp_points):
@@ -744,8 +744,8 @@ def _prepare_pspa_cryo(choice):
                 # Map direction labels to numeric column for CSV
                 dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
                 file_management.save_csv("transistor_transfer_chars.csv",
-                    np.column_stack([data['Vgs'], data['Id'], data['Ig'], dir_numeric]),
-                    "Vgs_V, Id_A, Ig_A, Sweep_Dir_0fwd_1rev")
+                    np.column_stack([data['Vgs'], data['Id'], dir_numeric]),
+                    "Vgs_V, Id_A, Sweep_Dir_0fwd_1rev")
                 fwd = data['Sweep_Direction'] == 'forward'
                 rev = data['Sweep_Direction'] == 'reverse'
                 plt.figure(figsize=(10, 6))
@@ -776,15 +776,13 @@ def _prepare_pspa_cryo(choice):
                     drain_ch, gate_ch, source_ch, compliance, integration_time=integration_time)
                 dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
                 file_management.save_csv("transistor_transfer_chars.csv",
-                    np.column_stack([data['Vgs'], data['Id'], data['Ig'], dir_numeric]),
-                    "Vgs_V, Id_A, Ig_A, Sweep_Dir_0fwd_1rev")
+                    np.column_stack([data['Vgs'], data['Id'], dir_numeric]),
+                    "Vgs_V, Id_A, Sweep_Dir_0fwd_1rev")
                 fwd = data['Sweep_Direction'] == 'forward'
                 rev = data['Sweep_Direction'] == 'reverse'
                 plt.figure(figsize=(10, 6))
                 plt.semilogy(data['Vgs'][fwd], np.abs(data['Id'][fwd]), marker='o', label='|Id| (fwd)')
                 plt.semilogy(data['Vgs'][rev], np.abs(data['Id'][rev]), marker='s', label='|Id| (rev)')
-                plt.semilogy(data['Vgs'][fwd], np.abs(data['Ig'][fwd]), marker='^', label='|Ig| (fwd)')
-                plt.semilogy(data['Vgs'][rev], np.abs(data['Ig'][rev]), marker='v', label='|Ig| (rev)')
                 plt.xlabel('Vgs (V)'); plt.ylabel('Current (A)')
                 plt.title(f'Transfer Chars (Vds = {vds_constant} V) - Log')
                 plt.grid(True); plt.legend(); plt.tight_layout()
@@ -1671,8 +1669,8 @@ def execute_pspa_measurement(choice):
                     )
 
                     dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
-                    csv_data = np.column_stack([data['Vgs'], data['Id'], data['Ig'], dir_numeric])
-                    file_management.save_csv("transistor_transfer_chars.csv", csv_data, "Vgs_V, Id_A, Ig_A, Sweep_Dir_0fwd_1rev")
+                    csv_data = np.column_stack([data['Vgs'], data['Id'], dir_numeric])
+                    file_management.save_csv("transistor_transfer_chars.csv", csv_data, "Vgs_V, Id_A, Sweep_Dir_0fwd_1rev")
 
                     fwd = data['Sweep_Direction'] == 'forward'
                     rev = data['Sweep_Direction'] == 'reverse'
@@ -1718,8 +1716,8 @@ def execute_pspa_measurement(choice):
                     )
 
                     dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
-                    csv_data = np.column_stack([data['Vgs'], data['Id'], data['Ig'], dir_numeric])
-                    file_management.save_csv("transistor_transfer_chars.csv", csv_data, "Vgs_V, Id_A, Ig_A, Sweep_Dir_0fwd_1rev")
+                    csv_data = np.column_stack([data['Vgs'], data['Id'], dir_numeric])
+                    file_management.save_csv("transistor_transfer_chars.csv", csv_data, "Vgs_V, Id_A, Sweep_Dir_0fwd_1rev")
 
                     fwd = data['Sweep_Direction'] == 'forward'
                     rev = data['Sweep_Direction'] == 'reverse'
@@ -1727,8 +1725,6 @@ def execute_pspa_measurement(choice):
                     plt.figure(figsize=(10, 6))
                     plt.semilogy(data['Vgs'][fwd], np.abs(data['Id'][fwd]), marker='o', label='|Id| (fwd)')
                     plt.semilogy(data['Vgs'][rev], np.abs(data['Id'][rev]), marker='s', label='|Id| (rev)')
-                    plt.semilogy(data['Vgs'][fwd], np.abs(data['Ig'][fwd]), marker='^', label='|Ig| (fwd)')
-                    plt.semilogy(data['Vgs'][rev], np.abs(data['Ig'][rev]), marker='v', label='|Ig| (rev)')
                     plt.xlabel('Vgs (V)')
                     plt.ylabel('Current (A)')
                     plt.title(f'Transfer Characteristics (Vds = {vds_constant} V) - Log')

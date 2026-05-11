@@ -33,7 +33,6 @@ import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 
 log = logging.getLogger(__name__)
-
 # ---------------------------------------------------------------------------
 # Output directory defaults
 # ---------------------------------------------------------------------------

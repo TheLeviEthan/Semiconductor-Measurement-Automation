@@ -326,8 +326,8 @@ def execute_pspa_gui(choice, params):
                 drain_ch, gate_ch, source_ch, compliance, integration_time)
             dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
             file_management.save_csv("transistor_transfer_chars.csv",
-                np.column_stack([data['Vgs'], data['Id'], data['Ig'], dir_numeric]),
-                "Vgs_V, Id_A, Ig_A, Sweep_Dir_0fwd_1rev")
+                np.column_stack([data['Vgs'], data['Id'], dir_numeric]),
+                "Vgs_V, Id_A, Sweep_Dir_0fwd_1rev")
             fwd = data['Sweep_Direction'] == 'forward'
             rev = data['Sweep_Direction'] == 'reverse'
             plt.figure(figsize=(10, 6))
@@ -356,15 +356,13 @@ def execute_pspa_gui(choice, params):
                 drain_ch, gate_ch, source_ch, compliance, integration_time)
             dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
             file_management.save_csv("transistor_transfer_chars.csv",
-                np.column_stack([data['Vgs'], data['Id'], data['Ig'], dir_numeric]),
-                "Vgs_V, Id_A, Ig_A, Sweep_Dir_0fwd_1rev")
+                np.column_stack([data['Vgs'], data['Id'], dir_numeric]),
+                "Vgs_V, Id_A, Sweep_Dir_0fwd_1rev")
             fwd = data['Sweep_Direction'] == 'forward'
             rev = data['Sweep_Direction'] == 'reverse'
             plt.figure(figsize=(10, 6))
             plt.semilogy(data['Vgs'][fwd], np.abs(data['Id'][fwd]), marker='o', label='|Id| (fwd)')
             plt.semilogy(data['Vgs'][rev], np.abs(data['Id'][rev]), marker='s', label='|Id| (rev)')
-            plt.semilogy(data['Vgs'][fwd], np.abs(data['Ig'][fwd]), marker='^', label='|Ig| (fwd)')
-            plt.semilogy(data['Vgs'][rev], np.abs(data['Ig'][rev]), marker='v', label='|Ig| (rev)')
             plt.xlabel('Vgs (V)'); plt.ylabel('Current (A)')
             plt.title(f'Transfer Chars (Vds = {vds_constant} V) - Log')
             plt.grid(True); plt.legend(); plt.tight_layout()
