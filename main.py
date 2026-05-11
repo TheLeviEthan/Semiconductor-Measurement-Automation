@@ -1,7 +1,7 @@
 """
 Filename: main.py
 Author: Ethan Ruddell
-Date: 2026-3-2
+Date: 2026-5-11
 Description: Entry point for the NRG Semiconductor Measurement Automation.
 
 This is the file you run to start the software:
@@ -37,7 +37,6 @@ import logging_config
 
 log = logging.getLogger(__name__)
 
-
 def parse_args():
     """Parse CLI arguments for the measurement automation script."""
     parser = argparse.ArgumentParser(description="Automate semiconductor measurements.")
@@ -53,7 +52,6 @@ def parse_args():
         help="Launch the CLI instead of the GUI (default is GUI)",
     )
     return parser.parse_args()
-
 
 def gui_execute_measurement(instrument, measurement_idx, params):
     """
@@ -90,7 +88,7 @@ def main():
 
     # --- Logging ----------------------------------------------------------
     logging_config.setup(output_dir=file_management.default_output_dir)
-    log.info("Welcome to the NRG Semiconductor Measurement Automation")
+    log.info("Welcome to the NRG Semiconductor Measurement Automation. Developed by Ethan Ruddell (NRG, University of Florida).")
 
     if args.cli:
         log.info("Launching CLI mode")

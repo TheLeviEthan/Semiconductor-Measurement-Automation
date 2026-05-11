@@ -24,6 +24,38 @@ Automated measurements for PIA (4294A), PSPA (4155C/4156C), LCR (E4980A), and a 
 3. Enter target temperature, ramp rate, and measurement interval.
 4. Queue measurements and start the sweep.
 
+## PIA Oscillator Level
+
+The PIA (4294A) uses a small AC test signal to probe the device under test.
+In the GUI, this appears as an `Oscillator Level (Vrms)` field for every PIA
+measurement.
+
+- Higher values usually give a stronger signal and cleaner traces.
+- Lower values are gentler on sensitive devices and can reduce measurement
+	disturbance.
+- The value can be changed before each PIA run, so different measurements can
+	use different oscillator levels if needed.
+- The default stored in `config.yaml` is `0.5 Vrms`, and impedance-style PIA
+	measurements may still be run lower if your sample needs a lighter drive.
+
+If you are not sure what to use, start with the configured default and adjust
+only if the readings look noisy or the device seems sensitive to the test
+signal.
+
+## Permittivity Inputs
+
+For permittivity calculations, the software now asks for the dielectric
+thickness and the electrode area directly.
+
+- Enter thickness in nanometers.
+- Enter electrode area in square micrometers (`µm²`).
+- The software uses those two values to compute relative permittivity (`εr`).
+- This applies to both PIA and LCR permittivity measurements.
+
+If you previously used an electrode diameter, convert it to area before entering
+it. For a circular electrode, area is still the same physical quantity the old
+version derived internally, but now you enter it explicitly.
+
 ## USB Switchover Box (Multiplexer)
 
 - The GUI includes a **USB Switchbox** section under instrument selection.

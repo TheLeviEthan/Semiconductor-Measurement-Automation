@@ -581,18 +581,18 @@ Outputs:
 
 1.4.1 Compute Relative Permittivity (Dielectric Constant)
 -------------------------------------------------------------------------------
-Function: compute_eps_r(capacitance, thickness_nm, diameter_um)
+Function: compute_eps_r(capacitance, thickness_nm, area_um2)
 
 Inputs:
   - capacitance: Capacitance value (F, required)
   - thickness_nm: Dielectric thickness (nm, required)
-  - diameter_um: Electrode diameter (µm, required)
+  - area_um2: Electrode area (µm², required)
 
 Outputs:
   - eps_r: Relative permittivity (dimensionless)
 
 Formula: εr = C * t / (ε0 * A)
-  where ε0 = 8.854e-12 F/m, A = π(d/2)²
+  where ε0 = 8.854e-12 F/m, A = input electrode area
 
 
 1.4.2 Compute Impedance Components
@@ -829,12 +829,12 @@ Notes:
 
 2.4.1 Compute Relative Permittivity (Dielectric Constant)
 -------------------------------------------------------------------------------
-Function: compute_eps_r(cp_array, thickness_nm, diameter_um)
+Function: compute_eps_r(cp_array, thickness_nm, area_um2)
 
 Inputs:
   - cp_array: Capacitance value(s) (F, required) - can be array or scalar
   - thickness_nm: Dielectric thickness (nm, required)
-  - diameter_um: Electrode diameter (µm, required)
+  - area_um2: Electrode area (µm², required)
 
 Outputs:
   - eps_r: Relative permittivity (dimensionless)
@@ -1307,7 +1307,7 @@ freq_stop_hz:  5.0e6          # Stop frequency (Hz) = 5 MHz
 num_points:    201            # Number of sweep points
 apply_dc_bias: true           # Enable DC bias
 dc_bias_v:     0              # DC bias voltage (V)
-osc_voltage_v: 0.5            # AC oscillator level (V RMS)
+osc_voltage_v: 0.5            # PIA AC oscillator level (V RMS); lower values are gentler on the DUT
 dc_range:      "M10"          # DC bias current range (10 mA)
 
 

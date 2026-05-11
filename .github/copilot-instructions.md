@@ -6,14 +6,14 @@ These instructions make AI agents immediately productive in this repo by explain
 - Purpose: Automate measurements using an Agilent/Keysight 4294A (PIA) via GPIB using `pyvisa`, and generate plots/CSVs.
 - Components:
   - `main.py`: CLI entrypoint. Selects measurement type and orchestrates instrument setup, sweeps, and saving results.
-  - `pia.py`: Instrument constants and SCPI helpers for the 4294A. Provides initialization and sweep functions for impedance (|Z|–θ) and Cp–D.
+  - `pia.py`: Instrument constants and GPIB helpers for the 4294A. Provides initialization and sweep functions for impedance (|Z|–θ), Cp–D, and related PIA modes.
   - `file_management.py`: Centralized output handling: ensures an `output/` folder, uniquifies filenames, and saves plots/CSVs.
   - Legacy scripts: [`impedence_theta.py`](Semiconductor-Measurement-Automation/impedence_theta.py), [`capacitance_vs_tan_loss.py`](Semiconductor-Measurement-Automation/capacitance_vs_tan_loss.py), [`dielectric_meas.py`](Semiconductor-Measurement-Automation/dielectric_meas.py) contain earlier standalone flows now being consolidated.
   - `measurement_functions.py`: Draft/placeholder for additional flows (C–V cycles, εr computations) – many symbols are not yet wired.
 
 ## How Things Flow
 - CLI: `main.py` prompts selection, then uses `pia.py` to connect and configure the 4294A, runs a sweep, and hands data to `file_management.py` for saving.
-- Instrument session: `pia.connect_4294a()` → `pia.initialize_4294a_for_impedance()` or `pia.initialize_4294a_for_cpd()` → configure DC bias via `pia.configure_dc_bias()` → set sweep (`pia.set_frequency_sweep()`) → run + block on completion (`pia.single_sweep_and_wait()`).
+- Instrument session: `pia.connect_4294a()` → `pia.initialize_4294a_for_impedance()` or `pia.initialize_4294a_for_cpd()` → configure DC bias via `pia.configure_dc_bias()` → set sweep (`pia.set_frequency_sweep()`) → run + block on completion (`pia.single_sweep_and_wait()`). The AC drive level is the `osc_level` argument, exposed to the GUI/CLI as `osc_voltage_v`.
 - Data acquisition: `pia.read_sweep_axis()` returns frequency; `pia.read_trace_main(trace)` returns main values for trace A/B (Cp, D, |Z|, θ).
 - Output: `file_management.ensure_output_dir(file_management.output_dir)` → `file_management.save_image(...)`; a CSV saver exists but needs parameterization to accept arrays and headers.
 
@@ -22,6 +22,7 @@ These instructions make AI agents immediately productive in this repo by explain
 - Uniquify filenames: Use `file_management.uniquify(path)` to avoid clobbering.
 - Plotting: Use `matplotlib` with `semilogx` for frequency sweeps. Titles optionally include DC bias.
 - DC Bias: `pia.APPLY_DC_BIAS` (bool) and `pia.DC_BIAS_V` (float). When saving plots, pass both so titles/files reflect the actual bias.
+- Oscillator level: `osc_voltage_v` is the 4294A AC test-signal amplitude in Vrms. Lower values are gentler on the sample; higher values usually improve signal strength.
 - Sweep types: Frequency sweeps are LOG (`SWPT LOG`), DC bias sweeps are LIN (`SWPT LIN`). Use `SWPP FREQ` vs `SWPP DCB` appropriately.
 - Traces: For Cp–D mode, trace A = Cp, trace B = D. For Z–θ mode, trace A = |Z|, trace B = θ (degrees).
 
@@ -31,7 +32,7 @@ These instructions make AI agents immediately productive in this repo by explain
   & C:\Python313\python.exe "c:/Users/rudde/NRG Scripts Local/Semiconductor-Measurement-Automation/main.py"
   ```
 - Quick impedance sweep (programmatic example):
-  - Connect and init: `inst = pia.connect_4294a(); pia.initialize_4294a_for_impedance(inst)`
+  - Connect and init: `inst = pia.connect_4294a(); pia.initialize_4294a_for_impedance(inst, osc_level=0.1)`
   - Bias: `pia.configure_dc_bias(inst, pia.APPLY_DC_BIAS, pia.DC_BIAS_V)`
   - Measure: `freq, z_mag, theta = pia.measure_impedance_vs_freq(inst)`
   - Save: `file_management.save_image("Impedance Magnitude vs Frequency", "Frequency (Hz)", freq, "|Z| (Ohm)", z_mag, APPLY_DC_BIAS=pia.APPLY_DC_BIAS, DC_BIAS_V=pia.DC_BIAS_V)`

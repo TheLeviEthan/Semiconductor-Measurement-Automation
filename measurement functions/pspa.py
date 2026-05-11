@@ -560,7 +560,7 @@ def measure_transistor_output_characteristics(pspa, vds_start, vds_stop, vds_ste
 def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_step,
                                                  vds_constant,
                                                  drain_ch=2, gate_ch=3, source_ch=1,
-                                                 compliance=0.1):
+                                                 compliance=0.1, integration_time="MED"):
     """
     Bidirectional Vgs sweep for transfer characteristics.
     Sweeps Vgs from vgs_start -> vgs_stop (forward), then vgs_stop -> vgs_start
@@ -580,7 +580,7 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
     pspa.write("US")          # Switch to FLEX mode
     pspa.write("FMT 1")       # Set ASCII format with header
     
-    # 2. Configure channels
+    # 2. Configure channels and integration time
     configure_smu(pspa, drain_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, gate_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, source_ch, mode='VOLT', compliance=compliance)
@@ -589,7 +589,7 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
     pspa.write(f"MM 1,{drain_ch}")  # MM 1 = single-channel spot
     
     # 4. Set integration time (default to MED)
-    set_integration_time(pspa, INTEGRATION_TIME)
+    set_integration_time(pspa, integration_time)
     
     # 5. Force constant drain voltage and ground source
     set_voltage(pspa, source_ch, 0)
@@ -612,7 +612,7 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
     print("TRANSISTOR TRANSFER CHARACTERISTICS MEASUREMENT")
     print(f"{'='*70}")
     print(f"SMU Assignment: Drain=CH{drain_ch}, Gate=CH{gate_ch}, Source=CH{source_ch}")
-    print(f"Measurement Config: Spot Mode (MM 1), Integration={INTEGRATION_TIME}")
+    print(f"Measurement Config: Spot Mode (MM 1), Integration={integration_time}")
     print(f"Vds (constant): {vds_constant}V")
     print(f"Vgs sweep: {vgs_start}V → {vgs_stop}V (step {vgs_step}V) - Bidirectional")
     print(f"Compliance: {compliance} A")

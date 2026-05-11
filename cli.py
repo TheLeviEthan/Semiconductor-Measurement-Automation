@@ -1,7 +1,7 @@
 """
 Filename: cli.py
 Author: Ethan Ruddell
-Date: 2026-2-27
+Date: 2026-5-11
 Description: Command-Line Interface (CLI) for semiconductor measurement automation.
 
 This is the text-based menu system that runs in a terminal window.  It is the
@@ -57,28 +57,10 @@ from gpib_utils import (
 )
 from measurements_config import (
     PIA_MEASUREMENTS, PSPA_MEASUREMENTS, LCR_MEASUREMENTS,
-    get_measurement_name, get_measurements_list,
+    get_measurement_name, get_measurements_list, normalize_pspa_choice,
 )
 
 log = logging.getLogger(__name__)
-
-
-def _normalize_pspa_choice(choice):
-    """Map reordered PSPA menu indices to legacy execution indices."""
-    choice_map = {
-        1: 1,
-        2: 2,
-        3: 11,
-        4: 3,
-        5: 4,
-        6: 5,
-        7: 6,
-        8: 7,
-        9: 8,
-        10: 9,
-        11: 10,
-    }
-    return choice_map.get(choice, choice)
 
 # =============================
 # Global Cryo Parameters
@@ -444,8 +426,7 @@ def _pia_cv_butterfly(plot_mode="cp"):
     v_max = safe_float_input("Enter maximum voltage (V) [default 5]: ", 5)
     n_points = safe_int_input("Enter number of points per sweep [default 401]: ", 401)
     n_cycles = safe_int_input("Enter number of cycles [default 1]: ", 1)
-    thickness_nm = safe_float_input("Enter HZO thickness (nm) [default 10.0]: ", 10.0)
-    diam_um = safe_float_input("Enter electrode diameter (µm) [default 75.0]: ", 75.0)
+    thickness_nm, area_um2 = _prompt_hzo_geometry_inputs()
 
     with InstrumentSession(pia.setup, _pia_safe_close) as inst:
         pia.initialize_4294a_for_cpd(inst)
@@ -458,7 +439,7 @@ def _pia_cv_butterfly(plot_mode="cp"):
         for cycle in range(n_cycles):
             print(f"Running C–V cycle {cycle + 1}/{n_cycles}...")
             v, cp = pia.measure_single_cv_cycle(inst, freq_cv, v_min, v_max, n_points)
-            eps_r = pia.compute_eps_r(cp, thickness_nm, diam_um)
+            eps_r = pia.compute_eps_r(cp, thickness_nm, area_um2)
 
             all_v_cycles.append(v)
             all_cp_cycles.append(cp)
@@ -490,6 +471,24 @@ def _pia_cv_butterfly(plot_mode="cp"):
             )
         log.info("C–V %s measurement complete", label)
         print(f"C–V {label} measurement complete. Data saved to output folder.")
+
+
+def _prompt_hzo_geometry_inputs():
+    """Prompt for HZO thickness and electrode area used in PIA permittivity paths."""
+    thickness_nm = safe_float_input("Enter HZO thickness (nm) [default 10.0]: ", 10.0)
+    area_um2 = safe_float_input("Enter electrode area (µm²) [default 4418]: ", 4418)
+    return thickness_nm, area_um2
+
+
+def _prompt_optional_eps_inputs():
+    """Prompt whether to compute permittivity and collect geometry inputs if enabled."""
+    calc_eps = prompt_bool("Calculate permittivity?", False)
+    if not calc_eps:
+        return False, 0.0, 0.0
+
+    thickness_nm = safe_float_input("Enter dielectric thickness (nm) [default 10]: ", 10)
+    area_um2 = safe_float_input("Enter electrode area (µm²) [default 4418]: ", 4418)
+    return True, thickness_nm, area_um2
 
 
 # =============================
@@ -556,8 +555,7 @@ def _prepare_pia_cryo(choice):
         v_max = safe_float_input("Enter maximum voltage (V) [default 5]: ", 5)
         n_points = safe_int_input("Enter number of points per sweep [default 401]: ", 401)
         n_cycles = safe_int_input("Enter number of cycles [default 1]: ", 1)
-        thickness_nm = safe_float_input("Enter HZO thickness (nm) [default 10.0]: ", 10.0)
-        diam_um = safe_float_input("Enter electrode diameter (µm) [default 75.0]: ", 75.0)
+        thickness_nm, area_um2 = _prompt_hzo_geometry_inputs()
 
         def run():
             with InstrumentSession(pia.setup, _pia_safe_close) as inst:
@@ -565,7 +563,7 @@ def _prepare_pia_cryo(choice):
                 all_v, all_cp, all_eps, all_idx = [], [], [], []
                 for cyc in range(n_cycles):
                     v, cp = pia.measure_single_cv_cycle(inst, freq_cv, v_min, v_max, n_points)
-                    eps_r = pia.compute_eps_r(cp, thickness_nm, diam_um)
+                    eps_r = pia.compute_eps_r(cp, thickness_nm, area_um2)
                     all_v.append(v); all_cp.append(cp); all_eps.append(eps_r)
                     all_idx.append(np.full_like(v, cyc + 1, dtype=int))
                 file_management.save_csv("cv_dielectric_cycles.csv",
@@ -602,15 +600,14 @@ def _prepare_pia_cryo(choice):
                 "freq_start_hz": freq_start, "freq_stop_hz": freq_stop,
                 "num_points": freq_points, "dc_bias_v": bias_voltage,
                 "apply_dc_bias": (bias_voltage != 0)})
-        thickness_nm = safe_float_input("Enter HZO thickness (nm) [default 10.0]: ", 10.0)
-        diam_um = safe_float_input("Enter electrode diameter (µm) [default 75.0]: ", 75.0)
+        thickness_nm, area_um2 = _prompt_hzo_geometry_inputs()
 
         def run():
             with InstrumentSession(pia.setup, _pia_safe_close) as inst:
                 pia.initialize_4294a_for_cpd(inst)
                 freq_axis, cp_f = pia.measure_eps_vs_freq(
                     inst, freq_start, freq_stop, freq_points, bias_voltage)
-                eps_f = pia.compute_eps_r(cp_f, thickness_nm, diam_um)
+                eps_f = pia.compute_eps_r(cp_f, thickness_nm, area_um2)
                 file_management.save_csv("eps_vs_freq.csv",
                     np.column_stack([freq_axis, cp_f, eps_f]),
                     "frequency_Hz, Cp_F, eps_r")
@@ -690,7 +687,7 @@ def _prepare_pia_cryo(choice):
 def _prepare_pspa_cryo(choice):
     """Collect PSPA parameters and return (name, executor) for cryo queue."""
     name = pspa_measurements[choice - 1]
-    choice = _normalize_pspa_choice(choice)
+    choice = normalize_pspa_choice(choice)
     print(f"\n  Configuring: {name}")
 
     if choice == 1:
@@ -734,6 +731,7 @@ def _prepare_pspa_cryo(choice):
         vgs_step = safe_float_input("Enter Vgs step (V) [default 0.05]: ", 0.05)
         vds_constant = safe_float_input("Enter constant Vds (V) [default 5]: ", 5)
         compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
+        integration_time = prompt_choice("Enter integration time SHOR/MED/LONG [default MED]: ", "MED", valid_options=["SHOR", "MED", "LONG"])
         drain_ch = safe_int_input("Enter drain SMU channel [default 2]: ", 2)
         gate_ch = safe_int_input("Enter gate SMU channel [default 3]: ", 3)
         source_ch = safe_int_input("Enter source SMU channel [default 1]: ", 1)
@@ -742,7 +740,7 @@ def _prepare_pspa_cryo(choice):
             with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
                 data = pspa.measure_transistor_transfer_characteristics(
                     inst, vgs_start, vgs_stop, vgs_step, vds_constant,
-                    drain_ch, gate_ch, source_ch, compliance)
+                    drain_ch, gate_ch, source_ch, compliance, integration_time=integration_time)
                 # Map direction labels to numeric column for CSV
                 dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
                 file_management.save_csv("transistor_transfer_chars.csv",
@@ -766,6 +764,7 @@ def _prepare_pspa_cryo(choice):
         vgs_step = safe_float_input("Enter Vgs step (V) [default 0.05]: ", 0.05)
         vds_constant = safe_float_input("Enter constant Vds (V) [default 5]: ", 5)
         compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
+        integration_time = prompt_choice("Enter integration time SHOR/MED/LONG [default MED]: ", "MED", valid_options=["SHOR", "MED", "LONG"])
         drain_ch = safe_int_input("Enter drain SMU channel [default 2]: ", 2)
         gate_ch = safe_int_input("Enter gate SMU channel [default 3]: ", 3)
         source_ch = safe_int_input("Enter source SMU channel [default 1]: ", 1)
@@ -774,7 +773,7 @@ def _prepare_pspa_cryo(choice):
             with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
                 data = pspa.measure_transistor_transfer_characteristics(
                     inst, vgs_start, vgs_stop, vgs_step, vds_constant,
-                    drain_ch, gate_ch, source_ch, compliance)
+                    drain_ch, gate_ch, source_ch, compliance, integration_time=integration_time)
                 dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
                 file_management.save_csv("transistor_transfer_chars.csv",
                     np.column_stack([data['Vgs'], data['Id'], data['Ig'], dir_numeric]),
@@ -1150,12 +1149,7 @@ def _prepare_lcr_cryo(choice):
         num_points = safe_int_input("Enter number of points per direction [default 201]: ", 201)
         num_cycles = safe_int_input("Enter number of cycles [default 1]: ", 1)
         ac_level = safe_float_input("Enter AC level (V) [default 0.1]: ", 0.1)
-        calc_eps = prompt_bool("Calculate permittivity?", False)
-        thickness_nm = 0.0
-        diameter_um = 0.0
-        if calc_eps:
-            thickness_nm = safe_float_input("Enter dielectric thickness (nm) [default 10]: ", 10)
-            diameter_um = safe_float_input("Enter electrode diameter (µm) [default 75]: ", 75)
+        calc_eps, thickness_nm, area_um2 = _prompt_optional_eps_inputs()
 
         def run():
             with InstrumentSession(
@@ -1168,7 +1162,7 @@ def _prepare_lcr_cryo(choice):
                         inst, freq, v_min, v_max, num_points)
                     all_v.append(voltage); all_cp.append(capacitance); all_d.append(dissipation)
                     if calc_eps:
-                        all_eps_list.append(lcr.compute_eps_r(capacitance, thickness_nm, diameter_um))
+                        all_eps_list.append(lcr.compute_eps_r(capacitance, thickness_nm, area_um2))
                 file_management.save_cycle_plot(
                     f"C-V Butterfly at {freq:.0f} Hz (LCR)", "Voltage (V)",
                     "Capacitance (F)", all_v, all_cp, "lcr_cv_butterfly.png")
@@ -1219,12 +1213,7 @@ def _prepare_lcr_cryo(choice):
         ac_level = safe_float_input("Enter AC level (V) [default 1.0]: ", 1.0)
         apply_bias = prompt_bool("Apply DC bias?", False)
         bias_v = safe_float_input("Enter DC bias (V) [default 0]: ", 0) if apply_bias else 0.0
-        calc_eps = prompt_bool("Calculate permittivity?", False)
-        thickness_nm = 0.0
-        diameter_um = 0.0
-        if calc_eps:
-            thickness_nm = safe_float_input("Enter dielectric thickness (nm) [default 10]: ", 10)
-            diameter_um = safe_float_input("Enter electrode diameter (µm) [default 75]: ", 75)
+        calc_eps, thickness_nm, area_um2 = _prompt_optional_eps_inputs()
 
         def run():
             with InstrumentSession(
@@ -1236,7 +1225,7 @@ def _prepare_lcr_cryo(choice):
                 sec_label = "D" if mode == "CPD" else "Secondary"
                 result_str = f"  Cap={cap:.6e} F  {sec_label}={secondary:.6e}"
                 if calc_eps:
-                    eps_r = lcr.compute_eps_r(cap, thickness_nm, diameter_um)
+                    eps_r = lcr.compute_eps_r(cap, thickness_nm, area_um2)
                     result_str += f"  εr={eps_r:.2f}"
                     file_management.save_csv("lcr_single_capacitance.csv",
                         np.array([[freq, cap, secondary, eps_r]]),
@@ -1473,15 +1462,14 @@ def execute_pia_measurement(choice):
                     pia.current_parameters["dc_bias_v"] = bias_voltage
                     pia.current_parameters["apply_dc_bias"] = (bias_voltage != 0)
 
-                thickness_nm = safe_float_input("Enter HZO thickness (nm) [default 10.0]: ", 10.0)
-                diam_um = safe_float_input("Enter electrode diameter (µm) [default 75.0]: ", 75.0)
+                thickness_nm, area_um2 = _prompt_hzo_geometry_inputs()
 
                 with InstrumentSession(pia.setup, _pia_safe_close) as inst:
                     pia.initialize_4294a_for_cpd(inst)
 
                     print("Running εr vs frequency sweep...")
                     freq_axis, cp_f = pia.measure_eps_vs_freq(inst, freq_start, freq_stop, freq_points, bias_voltage)
-                    eps_f = pia.compute_eps_r(cp_f, thickness_nm, diam_um)
+                    eps_f = pia.compute_eps_r(cp_f, thickness_nm, area_um2)
 
                     csv_data = np.column_stack([freq_axis, cp_f, eps_f])
                     file_management.save_csv(
@@ -1607,7 +1595,7 @@ def run_pspa_measurements():
 
 def execute_pspa_measurement(choice):
     """Execute the selected PSPA measurement."""
-    choice = _normalize_pspa_choice(choice)
+    choice = normalize_pspa_choice(choice)
     repeating = True
     while repeating:
         if choice == 1:
@@ -1671,13 +1659,15 @@ def execute_pspa_measurement(choice):
             drain_ch = safe_int_input("Enter drain SMU channel [default 2]: ", 2)
             gate_ch = safe_int_input("Enter gate SMU channel [default 3]: ", 3)
             source_ch = safe_int_input("Enter source SMU channel [default 1]: ", 1)
+            integration_time = prompt_choice("Enter integration time SHOR/MED/LONG [default MED]: ", "MED", valid_options=["SHOR", "MED", "LONG"])
+
             
             try:
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
                     print("\nRunning transistor transfer characteristics sweep...")
                     data = pspa.measure_transistor_transfer_characteristics(
                         pspa_inst, vgs_start, vgs_stop, vgs_step, vds_constant,
-                        drain_ch, gate_ch, source_ch, compliance
+                        drain_ch, gate_ch, source_ch, compliance, integration_time=integration_time
                     )
 
                     dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
@@ -1713,6 +1703,7 @@ def execute_pspa_measurement(choice):
             vgs_step = safe_float_input("Enter Vgs step (V) [default 0.05]: ", 0.05)
             vds_constant = safe_float_input("Enter constant Vds (V) [default 5]: ", 5)
             compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
+            integration_time = prompt_choice("Enter integration time SHOR/MED/LONG [default MED]: ", "MED", valid_options=["SHOR", "MED", "LONG"])
 
             drain_ch = safe_int_input("Enter drain SMU channel [default 2]: ", 2)
             gate_ch = safe_int_input("Enter gate SMU channel [default 3]: ", 3)
@@ -1723,7 +1714,7 @@ def execute_pspa_measurement(choice):
                     print("\nRunning transistor transfer characteristics sweep...")
                     data = pspa.measure_transistor_transfer_characteristics(
                         pspa_inst, vgs_start, vgs_stop, vgs_step, vds_constant,
-                        drain_ch, gate_ch, source_ch, compliance
+                        drain_ch, gate_ch, source_ch, compliance, integration_time=integration_time
                     )
 
                     dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
@@ -2305,12 +2296,7 @@ def execute_lcr_measurement(choice):
             num_points = safe_int_input("Enter number of points per direction [default 201]: ", 201)
             num_cycles = safe_int_input("Enter number of cycles [default 1]: ", 1)
             ac_level = safe_float_input("Enter AC level (V) [default 0.1]: ", 0.1)
-            calc_eps = prompt_bool("Calculate permittivity?", False)
-            thickness_nm = 0.0
-            diameter_um = 0.0
-            if calc_eps:
-                thickness_nm = safe_float_input("Enter dielectric thickness (nm) [default 10]: ", 10)
-                diameter_um = safe_float_input("Enter electrode diameter (µm) [default 75]: ", 75)
+            calc_eps, thickness_nm, area_um2 = _prompt_optional_eps_inputs()
 
             try:
                 with InstrumentSession(
@@ -2333,7 +2319,7 @@ def execute_lcr_measurement(choice):
                         all_cp_cycles.append(capacitance)
                         all_d_cycles.append(dissipation)
                         if calc_eps:
-                            all_eps_cycles.append(lcr.compute_eps_r(capacitance, thickness_nm, diameter_um))
+                            all_eps_cycles.append(lcr.compute_eps_r(capacitance, thickness_nm, area_um2))
 
                     file_management.save_cycle_plot(
                         f"C-V Butterfly at {freq:.0f} Hz (LCR)", "Voltage (V)", "Capacitance (F)",
@@ -2412,12 +2398,7 @@ def execute_lcr_measurement(choice):
             bias_v = 0.0
             if apply_bias:
                 bias_v = safe_float_input("Enter DC bias (V) [default 0]: ", 0)
-            calc_eps = prompt_bool("Calculate permittivity?", False)
-            thickness_nm = 0.0
-            diameter_um = 0.0
-            if calc_eps:
-                thickness_nm = safe_float_input("Enter dielectric thickness (nm) [default 10]: ", 10)
-                diameter_um = safe_float_input("Enter electrode diameter (µm) [default 75]: ", 75)
+            calc_eps, thickness_nm, area_um2 = _prompt_optional_eps_inputs()
 
             try:
                 with InstrumentSession(
@@ -2439,7 +2420,7 @@ def execute_lcr_measurement(choice):
                     if apply_bias:
                         print(f"DC Bias: {bias_v:.2f} V")
                     if calc_eps:
-                        eps_r = lcr.compute_eps_r(cap, thickness_nm, diameter_um)
+                        eps_r = lcr.compute_eps_r(cap, thickness_nm, area_um2)
                         print(f"Relative Permittivity εr: {eps_r:.2f}")
             except Exception as e:
                 log.error("LCR single capacitance failed: %s", e)

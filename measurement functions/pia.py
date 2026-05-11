@@ -15,10 +15,11 @@ many different quantities:
   - εr        (relative permittivity / dielectric constant)
 
 Communication uses plain GPIB commands (not SCPI).  The most important ones:
-  - MEAS CPD / ZTD / RX / GB / YTD  – select measurement mode
-  - SWPP FREQ / DCB                 – sweep frequency or DC bias
-  - SING                             – start a single sweep
-  - OUTPSWPRM? / OUTPDTRC?          – read back the data
+    - MEAS CPD / ZTD / RX / GB / YTD  – select measurement mode
+    - SWPP FREQ / DCB                 – sweep frequency or DC bias
+    - SING                             – start a single sweep
+    - OUTPSWPRM? / OUTPDTRC?          – read back the data
+    - POWMOD VOLT / POWE               – set the AC oscillator level
 
 Typical workflow:
   1. connect_4294a()              – open a GPIB session
@@ -32,6 +33,8 @@ import pyvisa
 import numpy as np
 import logging
 import config
+from dielectric_utils import compute_eps_r_from_area
+from gpib_utils import prompt_bool, safe_float_input, safe_int_input
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +56,10 @@ NUM_POINTS = 201         # number of data points across the sweep
 # which is needed for C-V (capacitance vs voltage) measurements.
 APPLY_DC_BIAS = True     # True = apply a fixed DC bias; False = no DC bias
 DC_BIAS_V = 0            # bias voltage (V) if APPLY_DC_BIAS = True
+
+# Default AC oscillator level for most PIA measurements.
+DEFAULT_OSC_VOLTAGE_VRMS = float(config.get("pia", "osc_voltage_v", 0.5))
+DEFAULT_IMPEDANCE_OSC_VRMS = 0.1
 
 # =============================
 # Measurement Parameters
@@ -99,7 +106,7 @@ def connect_4294a(resource_name=None):
     inst.write_termination = '\n'
     return inst
 
-def _initialize_4294a(inst, meas_mode="CPD", osc_level=0.5):
+def _initialize_4294a(inst, meas_mode="CPD", osc_level=None):
     """
     Generic 4294A initialization:
     - Reset & clear
@@ -114,7 +121,8 @@ def _initialize_4294a(inst, meas_mode="CPD", osc_level=0.5):
         meas_mode: Measurement type string for the MEAS command
                    "CPD" = Cp-D, "ZTD" = Z-θ, "RX" = R-X,
                    "GB" = G-B, "YTD" = Y-θ
-        osc_level: AC oscillator level in Vrms (default 0.5)
+        osc_level: AC oscillator level in Vrms. If omitted, the default PIA
+            oscillator level from config.yaml is used.
     """
     inst.write("*RST")
     inst.write("*CLS")
@@ -122,35 +130,48 @@ def _initialize_4294a(inst, meas_mode="CPD", osc_level=0.5):
     inst.write(f"MEAS {meas_mode}")
     inst.write("FORM4")
     inst.write("POWMOD VOLT")
+    if osc_level is None:
+        osc_level = DEFAULT_OSC_VOLTAGE_VRMS
     inst.write(f"POWE {osc_level}")
     inst.write("DCMOD VOLT")
     inst.write("DCRNG M10")
 
 
 # Convenience wrappers — thin calls to _initialize_4294a
-def initialize_4294a_for_cpd(inst):
-    """Initialize for Cp-D measurement (trace A = Cp, trace B = D)."""
-    _initialize_4294a(inst, "CPD", osc_level=0.5)
+def initialize_4294a_for_cpd(inst, osc_level=None):
+    """Initialize for Cp-D measurement (trace A = Cp, trace B = D).
+
+    The oscillator level is the AC drive amplitude applied to the device under
+    test. Higher levels usually produce a stronger signal; lower levels are
+    gentler on sensitive devices.
+    """
+    _initialize_4294a(inst, "CPD", osc_level=osc_level)
 
 
-def initialize_4294a_for_impedance(inst):
-    """Initialize for Z-θ measurement (trace A = |Z|, trace B = θ)."""
-    _initialize_4294a(inst, "ZTD", osc_level=0.1)
+def initialize_4294a_for_impedance(inst, osc_level=None):
+    """Initialize for Z-θ measurement (trace A = |Z|, trace B = θ).
+
+    Impedance measurements historically use a lower AC drive level, so the
+    default remains conservative unless the caller overrides it.
+    """
+    if osc_level is None:
+        osc_level = DEFAULT_IMPEDANCE_OSC_VRMS
+    _initialize_4294a(inst, "ZTD", osc_level=osc_level)
 
 
-def initialize_4294a_for_rx(inst):
+def initialize_4294a_for_rx(inst, osc_level=None):
     """Initialize for R-X measurement (trace A = R, trace B = X)."""
-    _initialize_4294a(inst, "RX", osc_level=0.5)
+    _initialize_4294a(inst, "RX", osc_level=osc_level)
 
 
-def initialize_4294a_for_gb(inst):
+def initialize_4294a_for_gb(inst, osc_level=None):
     """Initialize for G-B measurement (trace A = G, trace B = B)."""
-    _initialize_4294a(inst, "GB", osc_level=0.5)
+    _initialize_4294a(inst, "GB", osc_level=osc_level)
 
 
-def initialize_4294a_for_ytd(inst):
+def initialize_4294a_for_ytd(inst, osc_level=None):
     """Initialize for Y-θ measurement (trace A = |Y|, trace B = θ)."""
-    _initialize_4294a(inst, "YTD", osc_level=0.5)
+    _initialize_4294a(inst, "YTD", osc_level=osc_level)
 
 
 def configure_dc_bias(inst, apply_bias, dc_bias_v):
@@ -314,24 +335,28 @@ def get_frequency_parameters(use_last=None, freq_start=None, freq_stop=None, num
     global current_parameters
     
     if use_last:
-        freq_start = current_parameters["freq_start_hz"]
-        freq_stop = current_parameters["freq_stop_hz"]
-        num_points = current_parameters["num_points"]
-    else:
-        # Prompt user for parameters with defaults from current_parameters
-        freq_start_input = input(f"Enter start frequency (Hz) [default {current_parameters['freq_start_hz']:.2e}]: ").strip()
-        freq_start = float(freq_start_input) if freq_start_input else current_parameters["freq_start_hz"]
-        
-        freq_stop_input = input(f"Enter stop frequency (Hz) [default {current_parameters['freq_stop_hz']:.2e}]: ").strip()
-        freq_stop = float(freq_stop_input) if freq_stop_input else current_parameters["freq_stop_hz"]
-        
-        num_points_input = input(f"Enter number of points [default {current_parameters['num_points']}]: ").strip()
-        num_points = int(num_points_input) if num_points_input else current_parameters["num_points"]
-        
-        # Update current parameters for future duplication
-        current_parameters["freq_start_hz"] = freq_start
-        current_parameters["freq_stop_hz"] = freq_stop
-        current_parameters["num_points"] = num_points
+        return (
+            current_parameters["freq_start_hz"],
+            current_parameters["freq_stop_hz"],
+            current_parameters["num_points"],
+        )
+
+    freq_start = safe_float_input(
+        f"Enter start frequency (Hz) [default {current_parameters['freq_start_hz']:.2e}]: ",
+        current_parameters["freq_start_hz"],
+    )
+    freq_stop = safe_float_input(
+        f"Enter stop frequency (Hz) [default {current_parameters['freq_stop_hz']:.2e}]: ",
+        current_parameters["freq_stop_hz"],
+    )
+    num_points = safe_int_input(
+        f"Enter number of points [default {current_parameters['num_points']}]: ",
+        current_parameters["num_points"],
+    )
+
+    current_parameters["freq_start_hz"] = freq_start
+    current_parameters["freq_stop_hz"] = freq_stop
+    current_parameters["num_points"] = num_points
     
     return freq_start, freq_stop, num_points
 
@@ -351,22 +376,19 @@ def get_dc_bias_parameters(use_last=None, apply_bias=None, bias_voltage=None):
     global current_parameters
     
     if use_last:
-        apply_bias = current_parameters["apply_dc_bias"]
-        bias_voltage = current_parameters["dc_bias_v"]
+        return current_parameters["apply_dc_bias"], current_parameters["dc_bias_v"]
+
+    apply_bias = prompt_bool("Apply DC bias?", current_parameters["apply_dc_bias"])
+    if apply_bias:
+        bias_voltage = safe_float_input(
+            f"Enter DC bias voltage (V) [default {current_parameters['dc_bias_v']}]: ",
+            current_parameters["dc_bias_v"],
+        )
     else:
-        # Prompt user for DC bias parameters
-        bias_input = input(f"Apply DC bias? [y/n] [default {'y' if current_parameters['apply_dc_bias'] else 'n'}]: ").strip().lower()
-        apply_bias = bias_input == 'y' if bias_input else current_parameters["apply_dc_bias"]
-        
-        if apply_bias:
-            bias_v_input = input(f"Enter DC bias voltage (V) [default {current_parameters['dc_bias_v']}]: ").strip()
-            bias_voltage = float(bias_v_input) if bias_v_input else current_parameters["dc_bias_v"]
-        else:
-            bias_voltage = 0.0
-        
-        # Update current parameters for future duplication
-        current_parameters["apply_dc_bias"] = apply_bias
-        current_parameters["dc_bias_v"] = bias_voltage
+        bias_voltage = 0.0
+
+    current_parameters["apply_dc_bias"] = apply_bias
+    current_parameters["dc_bias_v"] = bias_voltage
     
     return apply_bias, bias_voltage
 
@@ -378,8 +400,7 @@ def prompt_for_parameter_duplication():
     Returns:
         bool: True if user wants to duplicate, False otherwise
     """
-    dup_input = input("Use last measurement parameters? (y/n): ").strip().lower()
-    return dup_input == 'y'
+    return prompt_bool("Use last measurement parameters?", False)
 
 
 
@@ -411,21 +432,20 @@ def set_frequency(inst, freq_hz):
 
 
 
-def compute_eps_r(cp_array, thickness_nm, diameter_um):
+def compute_eps_r(cp_array, thickness_nm, area_um2):
     """
     Compute dielectric constant εr from Cp:
         εr = Cp * t / (ε0 * A)
     where:
         t = thickness (m)
-        A = electrode area (m^2) = π (d/2)^2
-    Cp is in F.
+        A = electrode area (m^2)
+
+    Args:
+        cp_array: Capacitance array in F
+        thickness_nm: Dielectric thickness in nm
+        area_um2: Electrode area in µm²
     """
-    eps0 = 8.854e-12  # F/m
-    t_m = thickness_nm * 1e-9
-    d_m = diameter_um * 1e-6
-    area = np.pi * (d_m / 2.0) ** 2
-    eps_r = cp_array * t_m / (eps0 * area)
-    return eps_r
+    return compute_eps_r_from_area(cp_array, thickness_nm, area_um2)
 
 
 def measure_single_cv_cycle(inst, freq_hz, v_min, v_max, n_points):

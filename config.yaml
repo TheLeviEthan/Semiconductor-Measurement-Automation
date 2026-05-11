@@ -10,7 +10,7 @@ gpib:
   pia:  "GPIB0::24::INSTR"
   pspa: "GPIB0::16::INSTR"
   lcr:  "GPIB0::_____::INSTR"   # fill in when E4980A is on the bench
-  delta: "GPIB0::27::INSTR"   # fill in when E4980A is on the bench
+  delta: "GPIB0::27::INSTR" 
 
 
 # --- PIA (4294A) defaults ---
@@ -20,7 +20,7 @@ pia:
   num_points:    201
   apply_dc_bias: true
   dc_bias_v:     0
-  osc_voltage_v: 0.5        # AC oscillator level (Vrms)
+  osc_voltage_v: 0.5        # PIA AC oscillator level (Vrms); lower = gentler drive
   dc_range:      "M10"      # DC bias current range
 
 # --- PSPA (4155C/4156C) defaults ---
@@ -61,6 +61,6 @@ usb_switchbox:
   command_map:
     PIA:  "CTRL_A"                # Position A
     PSPA: "CTRL_B"                # Position B
-    LCR:  "CTRL_C"
+    LCR:  "CTRL_C"                # Position C  
     CRYO: "CTRL_D"                # Position D
     FERRO: "CTRL_D"               # Position D

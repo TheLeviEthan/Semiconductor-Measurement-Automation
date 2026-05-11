@@ -53,6 +53,22 @@ PSPA_MEASUREMENTS = [
     "Resistance Measurement",
 ]
 
+# The PSPA menu order shown to users differs from historical execution
+# indices used in the underlying measurement logic.
+PSPA_CHOICE_MAP = {
+    1: 1,
+    2: 2,
+    3: 11,
+    4: 3,
+    5: 4,
+    6: 5,
+    7: 6,
+    8: 7,
+    9: 8,
+    10: 9,
+    11: 10,
+}
+
 LCR_MEASUREMENTS = [
     "Impedance vs Frequency",
     "Capacitance vs Frequency",
@@ -78,24 +94,142 @@ LCR_MEASUREMENTS = [
 #
 # Maps (instrument, measurement_idx) to [(label, key, default_value), ...]
 
+PIA_OSCILLATOR_FIELD = ("Oscillator Level (Vrms)", "osc_voltage_v", "0.5")
+PIA_IMPEDANCE_OSCILLATOR_FIELD = ("Oscillator Level (Vrms)", "osc_voltage_v", "0.1")
+
+MEASUREMENT_HELP = {
+    ("PIA", 1): "Measures impedance magnitude and phase versus frequency to show the device's impedance response.",
+    ("PIA", 2): "Measures impedance phase versus frequency; useful for seeing whether the device behaves more capacitively or inductively.",
+    ("PIA", 3): "Measures capacitance and dissipation factor versus frequency to show capacitance dispersion and loss.",
+    ("PIA", 4): "Measures tan loss versus frequency, highlighting dielectric loss behavior as the frequency changes.",
+    ("PIA", 5): "Runs a C-V butterfly sweep using capacitance. The up/down bias sweep reveals hysteresis and dielectric response.",
+    ("PIA", 6): "Runs a C-V butterfly sweep but converts capacitance to relative permittivity so the dielectric response is easier to compare.",
+    ("PIA", 7): "Measures relative permittivity versus frequency at a fixed DC bias to show dielectric dispersion.",
+    ("PIA", 8): "Measures resistance and reactance versus frequency to separate resistive and reactive behavior.",
+    ("PIA", 9): "Measures conductance and susceptance versus frequency to show leakage and reactive admittance components.",
+    ("PIA", 10): "Measures admittance magnitude and phase versus frequency as another view of the device's AC response.",
+    ("PSPA", 1): "Sweeps drain voltage at several gate voltages to produce transistor output characteristics.",
+    ("PSPA", 2): "Sweeps gate voltage at a constant drain voltage to show transfer characteristics on a linear scale.",
+    ("PSPA", 3): "Sweeps gate voltage at a constant drain voltage to show transfer characteristics on a logarithmic scale.",
+    ("PSPA", 4): "Measures a unidirectional I-V curve over the requested voltage range.",
+    ("PSPA", 5): "Measures a bidirectional I-V curve so forward and reverse sweeps can be compared.",
+    ("PSPA", 6): "Runs a pulsed I-V test on a single device to reduce heating during the measurement.",
+    ("PSPA", 7): "Runs a pulsed transistor measurement with drain and gate pulsing.",
+    ("PSPA", 8): "Measures diode I-V behavior across a voltage sweep.",
+    ("PSPA", 9): "Measures gate leakage current to see how much current flows through the gate stack.",
+    ("PSPA", 10): "Sweeps voltage until the current reaches the breakdown threshold.",
+    ("PSPA", 11): "Measures resistance by forcing current and reading the resulting voltage drop.",
+    ("LCR", 1): "Measures impedance magnitude and phase versus frequency with the LCR meter.",
+    ("LCR", 2): "Measures capacitance and dissipation factor versus frequency with the LCR meter.",
+    ("LCR", 3): "Measures inductance and quality factor versus frequency with the LCR meter.",
+    ("LCR", 4): "Runs a single C-V sweep to show capacitance as the bias voltage changes.",
+    ("LCR", 5): "Runs repeated C-V sweeps so hysteresis and cycle-to-cycle changes are visible.",
+    ("LCR", 6): "Measures impedance at one frequency and optional DC bias point.",
+    ("LCR", 7): "Measures capacitance at one frequency and optional DC bias point, with optional permittivity calculation.",
+    ("LCR", 8): "Measures quality factor versus frequency to show how the sample losses change with frequency.",
+    ("LCR", 9): "Measures resistance and reactance versus frequency with the LCR meter.",
+    ("LCR", 10): "Measures conductance and susceptance versus frequency with the LCR meter.",
+    ("LCR", 11): "Runs open/short correction to remove fixture parasitics before measurement.",
+}
+
+PARAM_HELP_OVERRIDES = {
+    "freq_start": "First frequency in the sweep. Lower values capture low-frequency behavior; higher values capture high-frequency response.",
+    "freq_stop": "Last frequency in the sweep.",
+    "num_points": "Number of points in the sweep. More points give smoother curves but take longer.",
+    "sweep_type": "Chooses linear or logarithmic spacing between sweep points.",
+    "dc_bias_v": "Constant DC voltage applied during the measurement. Bias can change the measured response.",
+    "osc_voltage_v": "AC test-signal amplitude for the PIA. Higher values usually strengthen the signal; lower values are gentler on the device.",
+    "freq_cv": "Fixed frequency used during the C-V butterfly measurement.",
+    "freq": "Measurement frequency used for a single-point or fixed-frequency sweep.",
+    "v_min": "Starting voltage for the bias sweep.",
+    "v_max": "Ending voltage for the bias sweep.",
+    "v_step": "Voltage increment between sweep points.",
+    "n_points": "Number of points in each sweep direction.",
+    "n_cycles": "Number of complete up/down cycles to repeat.",
+    "thickness_nm": "Dielectric film thickness used when converting capacitance to permittivity.",
+    "area_um2": "Electrode area used when converting capacitance to permittivity.",
+    "ac_level": "AC stimulus amplitude for the LCR meter. Larger values can improve signal strength, but may disturb sensitive devices.",
+    "vds_start": "Starting drain-source voltage.",
+    "vds_stop": "Ending drain-source voltage.",
+    "vds_step": "Drain-source voltage increment.",
+    "vgs_start": "Starting gate-source voltage.",
+    "vgs_stop": "Ending gate-source voltage.",
+    "vgs_step": "Gate-source voltage increment.",
+    "vds_constant": "Drain-source voltage held constant during a transfer measurement.",
+    "compliance": "Safety limit that prevents the instrument from sourcing more current or voltage than allowed.",
+    "drain_ch": "Instrument channel assigned to the drain terminal.",
+    "gate_ch": "Instrument channel assigned to the gate terminal.",
+    "source_ch": "Instrument channel assigned to the source terminal.",
+    "channel": "Instrument channel used for the measurement.",
+    "anode_ch": "Instrument channel assigned to the diode anode.",
+    "cathode_ch": "Instrument channel assigned to the diode cathode.",
+    "sense_channel": "Sense channel used for the measurement. In 2-wire mode this is usually the same as the force channel.",
+    "mode": "Selects the measurement function or mode used by the instrument.",
+    "integration_time": "Sets the measurement aperture. Longer times are slower but usually less noisy.",
+    "threshold_a": "Current threshold used to identify breakdown.",
+    "i_start": "Starting current for a source-current sweep.",
+    "i_stop": "Ending current for a source-current sweep.",
+    "i_step": "Current increment for a source-current sweep.",
+    "v_base": "Baseline voltage used before the pulse.",
+    "v_pulse": "Voltage level during the pulse.",
+    "pulse_width_us": "Duration of each pulse in microseconds.",
+    "pulse_period_ms": "Time between pulses in milliseconds.",
+    "num_pulses": "Number of pulses to apply.",
+}
+
+
+def get_measurement_help(instrument: str, idx: int) -> str:
+    """Return a short help description for a measurement option."""
+    return MEASUREMENT_HELP.get((instrument, idx), "No additional help text is available for this measurement.")
+
+
+def get_parameter_help(key: str, label: str = "") -> str:
+    """Return a short help description for a parameter field."""
+    if key in PARAM_HELP_OVERRIDES:
+        return PARAM_HELP_OVERRIDES[key]
+
+    label_lower = label.lower()
+    if "frequency" in label_lower and "start" in label_lower:
+        return "First frequency in the sweep."
+    if "frequency" in label_lower and "stop" in label_lower:
+        return "Last frequency in the sweep."
+    if "points" in label_lower:
+        return "Number of points used for the sweep."
+    if "voltage" in label_lower and "start" in label_lower:
+        return "Starting voltage for the sweep."
+    if "voltage" in label_lower and "stop" in label_lower:
+        return "Ending voltage for the sweep."
+    if "bias" in label_lower:
+        return "DC bias applied during the measurement."
+    if "area" in label_lower:
+        return "Electrode area used in the permittivity calculation."
+    if "thickness" in label_lower:
+        return "Dielectric thickness used in the permittivity calculation."
+    return "Hover help for this parameter."
+
 MEASUREMENT_PARAMS = {
-    # PIA Measurements (1-4, 7-10: freq sweep with optional DC bias)
+    # PIA measurements always expose the oscillator level because it controls
+    # the AC test-signal amplitude used by the analyzer.
     ("PIA", 1): [("Start Frequency (Hz)", "freq_start", "1000"),
                   ("Stop Frequency (Hz)", "freq_stop", "1000000"),
                   ("Number of Points", "num_points", "201"),
-                  ("DC Bias (V)", "dc_bias_v", "0")],
+                  ("DC Bias (V)", "dc_bias_v", "0"),
+                  PIA_OSCILLATOR_FIELD],
     ("PIA", 2): [("Start Frequency (Hz)", "freq_start", "1000"),
                   ("Stop Frequency (Hz)", "freq_stop", "1000000"),
                   ("Number of Points", "num_points", "201"),
-                  ("DC Bias (V)", "dc_bias_v", "0")],
+                  ("DC Bias (V)", "dc_bias_v", "0"),
+                  PIA_IMPEDANCE_OSCILLATOR_FIELD],
     ("PIA", 3): [("Start Frequency (Hz)", "freq_start", "1000"),
                   ("Stop Frequency (Hz)", "freq_stop", "1000000"),
                   ("Number of Points", "num_points", "201"),
-                  ("DC Bias (V)", "dc_bias_v", "0")],
+                  ("DC Bias (V)", "dc_bias_v", "0"),
+                  PIA_OSCILLATOR_FIELD],
     ("PIA", 4): [("Start Frequency (Hz)", "freq_start", "1000"),
                   ("Stop Frequency (Hz)", "freq_stop", "1000000"),
                   ("Number of Points", "num_points", "201"),
-                  ("DC Bias (V)", "dc_bias_v", "0")],
+                  ("DC Bias (V)", "dc_bias_v", "0"),
+                  PIA_OSCILLATOR_FIELD],
     # PIA C-V Butterfly (5-6)
     ("PIA", 5): [("Measurement Frequency (Hz)", "freq_cv", "25000"),
                   ("Min Voltage (V)", "v_min", "0"),
@@ -103,34 +237,40 @@ MEASUREMENT_PARAMS = {
                   ("Points per Sweep", "n_points", "401"),
                   ("Number of Cycles", "n_cycles", "1"),
                   ("HZO Thickness (nm)", "thickness_nm", "10.0"),
-                  ("Electrode Diameter (µm)", "diam_um", "75.0")],
+                  ("Electrode Area (µm²)", "area_um2", "4418"),
+                  PIA_OSCILLATOR_FIELD],
     ("PIA", 6): [("Measurement Frequency (Hz)", "freq_cv", "25000"),
                   ("Min Voltage (V)", "v_min", "0"),
                   ("Max Voltage (V)", "v_max", "5"),
                   ("Points per Sweep", "n_points", "401"),
                   ("Number of Cycles", "n_cycles", "1"),
                   ("HZO Thickness (nm)", "thickness_nm", "10.0"),
-                  ("Electrode Diameter (µm)", "diam_um", "75.0")],
+                  ("Electrode Area (µm²)", "area_um2", "4418"),
+                  PIA_OSCILLATOR_FIELD],
     # PIA Permittivity vs Frequency (7)
     ("PIA", 7): [("Start Frequency (Hz)", "freq_start", "1000"),
                   ("Stop Frequency (Hz)", "freq_stop", "1000000"),
                   ("Number of Points", "num_points", "201"),
                   ("DC Bias (V)", "dc_bias_v", "0"),
                   ("HZO Thickness (nm)", "thickness_nm", "10.0"),
-                  ("Electrode Diameter (µm)", "diam_um", "75.0")],
+                  ("Electrode Area (µm²)", "area_um2", "4418"),
+                  PIA_OSCILLATOR_FIELD],
     # PIA additional frequency sweeps (8-10)
     ("PIA", 8): [("Start Frequency (Hz)", "freq_start", "1000"),
                   ("Stop Frequency (Hz)", "freq_stop", "1000000"),
                   ("Number of Points", "num_points", "201"),
-                  ("DC Bias (V)", "dc_bias_v", "0")],
+                  ("DC Bias (V)", "dc_bias_v", "0"),
+                  PIA_OSCILLATOR_FIELD],
     ("PIA", 9): [("Start Frequency (Hz)", "freq_start", "1000"),
                   ("Stop Frequency (Hz)", "freq_stop", "1000000"),
                   ("Number of Points", "num_points", "201"),
-                  ("DC Bias (V)", "dc_bias_v", "0")],
+                  ("DC Bias (V)", "dc_bias_v", "0"),
+                  PIA_OSCILLATOR_FIELD],
     ("PIA", 10): [("Start Frequency (Hz)", "freq_start", "1000"),
                    ("Stop Frequency (Hz)", "freq_stop", "1000000"),
                    ("Number of Points", "num_points", "201"),
-                   ("DC Bias (V)", "dc_bias_v", "0")],
+                   ("DC Bias (V)", "dc_bias_v", "0"),
+                   PIA_OSCILLATOR_FIELD],
     
     # PSPA Measurements
     ("PSPA", 1): [("Start Vds (V)", "vds_start", "0"),
@@ -140,6 +280,7 @@ MEASUREMENT_PARAMS = {
                    ("Stop Vgs (V)", "vgs_stop", "3"),
                    ("Vgs Step (V)", "vgs_step", "0.5"),
                    ("Current Compliance (A)", "compliance", "0.1"),
+                   ("Integration Time (SHOR/MED/LONG)", "integration_time", "MED"),
                    ("Drain SMU Channel", "drain_ch", "1"),
                    ("Gate SMU Channel", "gate_ch", "2"),
                    ("Source SMU Channel", "source_ch", "3")],
@@ -148,6 +289,7 @@ MEASUREMENT_PARAMS = {
                    ("Vgs Step (V)", "vgs_step", "0.05"),
                    ("Constant Vds (V)", "vds_constant", "5"),
                    ("Current Compliance (A)", "compliance", "0.1"),
+                   ("Integration Time (SHOR/MED/LONG)", "integration_time", "MED"),
                    ("Drain SMU Channel", "drain_ch", "2"),
                    ("Gate SMU Channel", "gate_ch", "3"),
                    ("Source SMU Channel", "source_ch", "1")],
@@ -168,6 +310,7 @@ MEASUREMENT_PARAMS = {
                    ("Pulse Period (ms)", "pulse_period_ms", "10"),
                    ("Number of Pulses", "num_pulses", "10"),
                    ("Current Compliance (A)", "compliance", "0.1"),
+                   ("Integration Time (SHOR/MED/LONG)", "integration_time", "MED"),
                    ("Channel Number", "channel", "1")],
     ("PSPA", 6): [("Base Vds (V)", "vds_base", "0"),
                    ("Pulse Vds (V)", "vds_pulse", "5"),
@@ -177,6 +320,7 @@ MEASUREMENT_PARAMS = {
                    ("Pulse Period (ms)", "pulse_period_ms", "10"),
                    ("Number of Pulses", "num_pulses", "10"),
                    ("Current Compliance (A)", "compliance", "0.1"),
+                   ("Integration Time (SHOR/MED/LONG)", "integration_time", "MED"),
                    ("Drain SMU Channel", "drain_ch", "1"),
                    ("Gate SMU Channel", "gate_ch", "2"),
                    ("Source SMU Channel", "source_ch", "3")],
@@ -209,6 +353,7 @@ MEASUREMENT_PARAMS = {
                     ("Vgs Step (V)", "vgs_step", "0.05"),
                     ("Constant Vds (V)", "vds_constant", "5"),
                     ("Current Compliance (A)", "compliance", "0.1"),
+                    ("Integration Time (SHOR/MED/LONG)", "integration_time", "MED"),
                     ("Drain SMU Channel", "drain_ch", "2"),
                     ("Gate SMU Channel", "gate_ch", "3"),
                     ("Source SMU Channel", "source_ch", "1")],
@@ -245,7 +390,7 @@ MEASUREMENT_PARAMS = {
                   ("Number of Cycles", "num_cycles", "1"),
                   ("AC Level (V)", "ac_level", "0.1"),
                   ("Dielectric Thickness (nm)", "thickness_nm", "10"),
-                  ("Electrode Diameter (µm)", "diameter_um", "75")],
+                  ("Electrode Area (µm²)", "area_um2", "4418")],
     ("LCR", 6): [("Frequency (Hz)", "freq", "1000"),
                   ("AC Level (V)", "ac_level", "1.0"),
                   ("DC Bias (V)", "dc_bias_v", "0")],
@@ -254,7 +399,7 @@ MEASUREMENT_PARAMS = {
                   ("AC Level (V)", "ac_level", "1.0"),
                   ("DC Bias (V)", "dc_bias_v", "0"),
                   ("Dielectric Thickness (nm)", "thickness_nm", "10"),
-                  ("Electrode Diameter (µm)", "diameter_um", "75")],
+                  ("Electrode Area (µm²)", "area_um2", "4418")],
     ("LCR", 8): [("Start Frequency (Hz)", "freq_start", "20"),
                   ("Stop Frequency (Hz)", "freq_stop", "2000000"),
                   ("Number of Points", "num_points", "201"),
@@ -305,3 +450,8 @@ def get_measurements_list(instrument: str) -> list[str]:
     elif instrument == "LCR":
         return LCR_MEASUREMENTS
     return []
+
+
+def normalize_pspa_choice(choice: int) -> int:
+    """Translate displayed PSPA menu index to execution index."""
+    return PSPA_CHOICE_MAP.get(choice, choice)

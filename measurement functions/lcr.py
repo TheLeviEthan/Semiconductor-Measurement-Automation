@@ -38,6 +38,8 @@ import pyvisa
 import numpy as np
 import time
 import logging
+from dielectric_utils import compute_eps_r_from_area
+from gpib_utils import prompt_bool, safe_float_input
 
 log = logging.getLogger(__name__)
 
@@ -572,7 +574,7 @@ def measure_cv_butterfly(inst, freq_hz, v_min, v_max, num_points):
 # =============================
 # Convert raw measurement data into physically meaningful quantities.
 
-def compute_eps_r(capacitance, thickness_nm, diameter_um):
+def compute_eps_r(capacitance, thickness_nm, area_um2):
     """
     Compute relative permittivity (dielectric constant) from capacitance.
     
@@ -581,18 +583,12 @@ def compute_eps_r(capacitance, thickness_nm, diameter_um):
     Args:
         capacitance: Capacitance in F
         thickness_nm: Dielectric thickness in nm
-        diameter_um: Electrode diameter in µm
+        area_um2: Electrode area in µm²
     
     Returns:
         Relative permittivity (dimensionless)
     """
-    eps0 = 8.854e-12  # F/m (vacuum permittivity)
-    t_m = thickness_nm * 1e-9
-    d_m = diameter_um * 1e-6
-    area_m2 = np.pi * (d_m / 2.0) ** 2
-    
-    eps_r = capacitance * t_m / (eps0 * area_m2)
-    return eps_r
+    return compute_eps_r_from_area(capacitance, thickness_nm, area_um2)
 
 def compute_impedance_components(z_mag, theta_deg):
     """
@@ -630,19 +626,20 @@ def get_measurement_parameters(use_last=False):
     if use_last:
         return current_parameters.copy()
     
-    # Prompt user for parameters
-    freq_input = input(f"Enter frequency (Hz) [default {current_parameters['frequency']:.2e}]: ").strip()
-    freq = float(freq_input) if freq_input else current_parameters["frequency"]
-    
-    ac_input = input(f"Enter AC level (V) [default {current_parameters['ac_level_v']}]: ").strip()
-    ac_level = float(ac_input) if ac_input else current_parameters["ac_level_v"]
-    
-    bias_input = input(f"Apply DC bias? (y/n) [default {'y' if current_parameters['apply_dc_bias'] else 'n'}]: ").strip().lower()
-    apply_bias = bias_input == 'y' if bias_input else current_parameters["apply_dc_bias"]
-    
+    freq = safe_float_input(
+        f"Enter frequency (Hz) [default {current_parameters['frequency']:.2e}]: ",
+        current_parameters["frequency"],
+    )
+    ac_level = safe_float_input(
+        f"Enter AC level (V) [default {current_parameters['ac_level_v']}]: ",
+        current_parameters["ac_level_v"],
+    )
+    apply_bias = prompt_bool("Apply DC bias?", current_parameters["apply_dc_bias"])
     if apply_bias:
-        bias_v_input = input(f"Enter DC bias (V) [default {current_parameters['dc_bias_v']}]: ").strip()
-        bias_v = float(bias_v_input) if bias_v_input else current_parameters["dc_bias_v"]
+        bias_v = safe_float_input(
+            f"Enter DC bias (V) [default {current_parameters['dc_bias_v']}]: ",
+            current_parameters["dc_bias_v"],
+        )
     else:
         bias_v = 0.0
     
@@ -656,8 +653,7 @@ def get_measurement_parameters(use_last=False):
 
 def prompt_for_parameter_duplication():
     """Ask user if they want to use last measurement parameters."""
-    dup_input = input("Use last measurement parameters? (y/n): ").strip().lower()
-    return dup_input == 'y'
+    return prompt_bool("Use last measurement parameters?", False)
 
 # =============================
 # Utility Functions

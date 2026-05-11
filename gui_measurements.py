@@ -13,6 +13,10 @@ Key design points:
   - NO input() calls anywhere.  All parameters come from the `params` dict.
     This is critical because `input()` blocks the entire program and would
     freeze the GUI.
+    - The PIA AC drive level is exposed as `osc_voltage_v` so every PIA
+        measurement can be run with the desired oscillator level.
+    - Permittivity calculations now take electrode area directly as `area_um2`
+        instead of asking for a diameter and computing area internally.
   - matplotlib is set to the "Agg" (non-interactive) backend so that plot
     images can be created safely from a background thread.
   - Each function follows the same pattern:
@@ -39,27 +43,9 @@ import pspa
 import lcr
 import file_management
 from gpib_utils import InstrumentSession
+from measurements_config import normalize_pspa_choice
 
 log = logging.getLogger(__name__)
-
-
-def _normalize_pspa_choice(choice):
-    """Map reordered PSPA menu indices to legacy execution indices."""
-    choice_map = {
-        1: 1,
-        2: 2,
-        3: 11,
-        4: 3,
-        5: 4,
-        6: 5,
-        7: 6,
-        8: 7,
-        9: 8,
-        10: 9,
-        11: 10,
-    }
-    return choice_map.get(choice, choice)
-
 
 # =============================
 # Helper
@@ -88,6 +74,9 @@ def execute_pia_gui(choice, params):
         List of image file paths that were generated.
     """
     image_paths = []
+    osc_voltage_v = params.get("osc_voltage_v")
+    if osc_voltage_v not in (None, ""):
+        osc_voltage_v = float(osc_voltage_v)
 
     if choice in (1, 2):
         # Impedance Magnitude (1) or Phase (2) vs Frequency
@@ -98,7 +87,7 @@ def execute_pia_gui(choice, params):
         apply_dc_bias = dc_bias_v != 0
 
         with InstrumentSession(pia.setup, _pia_safe_close) as inst:
-            pia.initialize_4294a_for_impedance(inst)
+            pia.initialize_4294a_for_impedance(inst, osc_voltage_v)
             pia.configure_dc_bias(inst, apply_dc_bias, dc_bias_v)
             freq_axis, z_mag, theta_deg = pia.measure_impedance_vs_freq(
                 inst, freq_start, freq_stop, num_points)
@@ -126,7 +115,7 @@ def execute_pia_gui(choice, params):
         apply_dc_bias = dc_bias_v != 0
 
         with InstrumentSession(pia.setup, _pia_safe_close) as inst:
-            pia.initialize_4294a_for_cpd(inst)
+            pia.initialize_4294a_for_cpd(inst, osc_voltage_v)
             pia.configure_dc_bias(inst, apply_dc_bias, dc_bias_v)
             freq_axis, cp_vals, d_vals = pia.measure_cpd_vs_freq(
                 inst, freq_start, freq_stop, num_points)
@@ -151,14 +140,14 @@ def execute_pia_gui(choice, params):
         n_points = int(float(params.get("n_points", 401)))
         n_cycles = int(float(params.get("n_cycles", 1)))
         thickness_nm = float(params.get("thickness_nm", 10.0))
-        diam_um = float(params.get("diam_um", 75.0))
+        area_um2 = float(params.get("area_um2", 4418.0))
 
         with InstrumentSession(pia.setup, _pia_safe_close) as inst:
-            pia.initialize_4294a_for_cpd(inst)
+            pia.initialize_4294a_for_cpd(inst, osc_voltage_v)
             all_v, all_cp, all_eps, all_idx = [], [], [], []
             for cyc in range(n_cycles):
                 v, cp = pia.measure_single_cv_cycle(inst, freq_cv, v_min, v_max, n_points)
-                eps_r = pia.compute_eps_r(cp, thickness_nm, diam_um)
+                eps_r = pia.compute_eps_r(cp, thickness_nm, area_um2)
                 all_v.append(v); all_cp.append(cp); all_eps.append(eps_r)
                 all_idx.append(np.full_like(v, cyc + 1, dtype=int))
 
@@ -182,13 +171,13 @@ def execute_pia_gui(choice, params):
         num_points = int(float(params.get("num_points", 201)))
         dc_bias_v = float(params.get("dc_bias_v", 0))
         thickness_nm = float(params.get("thickness_nm", 10.0))
-        diam_um = float(params.get("diam_um", 75.0))
+        area_um2 = float(params.get("area_um2", 4418.0))
 
         with InstrumentSession(pia.setup, _pia_safe_close) as inst:
-            pia.initialize_4294a_for_cpd(inst)
+            pia.initialize_4294a_for_cpd(inst, osc_voltage_v)
             freq_axis, cp_f = pia.measure_eps_vs_freq(
                 inst, freq_start, freq_stop, num_points, dc_bias_v)
-            eps_f = pia.compute_eps_r(cp_f, thickness_nm, diam_um)
+            eps_f = pia.compute_eps_r(cp_f, thickness_nm, area_um2)
 
             file_management.save_csv("eps_vs_freq.csv",
                 np.column_stack([freq_axis, cp_f, eps_f]),
@@ -206,7 +195,7 @@ def execute_pia_gui(choice, params):
         apply_dc_bias = dc_bias_v != 0
 
         with InstrumentSession(pia.setup, _pia_safe_close) as inst:
-            pia.initialize_4294a_for_rx(inst)
+            pia.initialize_4294a_for_rx(inst, osc_voltage_v)
             pia.configure_dc_bias(inst, apply_dc_bias, dc_bias_v)
             freq_axis, r_vals, x_vals = pia.measure_rx_vs_freq(
                 inst, freq_start, freq_stop, num_points)
@@ -230,7 +219,7 @@ def execute_pia_gui(choice, params):
         apply_dc_bias = dc_bias_v != 0
 
         with InstrumentSession(pia.setup, _pia_safe_close) as inst:
-            pia.initialize_4294a_for_gb(inst)
+            pia.initialize_4294a_for_gb(inst, osc_voltage_v)
             pia.configure_dc_bias(inst, apply_dc_bias, dc_bias_v)
             freq_axis, g_vals, b_vals = pia.measure_gb_vs_freq(
                 inst, freq_start, freq_stop, num_points)
@@ -254,7 +243,7 @@ def execute_pia_gui(choice, params):
         apply_dc_bias = dc_bias_v != 0
 
         with InstrumentSession(pia.setup, _pia_safe_close) as inst:
-            pia.initialize_4294a_for_ytd(inst)
+            pia.initialize_4294a_for_ytd(inst, osc_voltage_v)
             pia.configure_dc_bias(inst, apply_dc_bias, dc_bias_v)
             freq_axis, y_mag, y_theta = pia.measure_ytd_vs_freq(
                 inst, freq_start, freq_stop, num_points)
@@ -284,7 +273,7 @@ def execute_pia_gui(choice, params):
 def execute_pspa_gui(choice, params):
     """Execute a PSPA measurement using GUI-provided params (no input() calls)."""
 
-    choice = _normalize_pspa_choice(choice)
+    choice = normalize_pspa_choice(choice)
 
     if choice == 1:
         # Transistor Output Characteristics
@@ -328,11 +317,13 @@ def execute_pspa_gui(choice, params):
         drain_ch = int(float(params.get("drain_ch", 2)))
         gate_ch = int(float(params.get("gate_ch", 3)))
         source_ch = int(float(params.get("source_ch", 1)))
+        source_ch = int(float(params.get("source_ch", 1)))
+        integration_time = str(params.get("integration_time", "MED"))
 
         with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
             data = pspa.measure_transistor_transfer_characteristics(
                 inst, vgs_start, vgs_stop, vgs_step, vds_constant,
-                drain_ch, gate_ch, source_ch, compliance)
+                drain_ch, gate_ch, source_ch, compliance, integration_time)
             dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
             file_management.save_csv("transistor_transfer_chars.csv",
                 np.column_stack([data['Vgs'], data['Id'], data['Ig'], dir_numeric]),
@@ -357,11 +348,12 @@ def execute_pspa_gui(choice, params):
         drain_ch = int(float(params.get("drain_ch", 2)))
         gate_ch = int(float(params.get("gate_ch", 3)))
         source_ch = int(float(params.get("source_ch", 1)))
+        integration_time = str(params.get("integration_time", "MED"))
 
         with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
             data = pspa.measure_transistor_transfer_characteristics(
                 inst, vgs_start, vgs_stop, vgs_step, vds_constant,
-                drain_ch, gate_ch, source_ch, compliance)
+                drain_ch, gate_ch, source_ch, compliance, integration_time)
             dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
             file_management.save_csv("transistor_transfer_chars.csv",
                 np.column_stack([data['Vgs'], data['Id'], data['Ig'], dir_numeric]),
@@ -716,8 +708,8 @@ def execute_lcr_gui(choice, params):
         num_cycles = int(float(params.get("num_cycles", 1)))
         ac_level = float(params.get("ac_level", 0.1))
         thickness_nm = float(params.get("thickness_nm", 0))
-        diameter_um = float(params.get("diameter_um", 0))
-        calc_eps = thickness_nm > 0 and diameter_um > 0
+        area_um2 = float(params.get("area_um2", 0))
+        calc_eps = thickness_nm > 0 and area_um2 > 0
 
         with InstrumentSession(
             lambda: lcr.setup(measurement_function="CPD"),
@@ -729,7 +721,7 @@ def execute_lcr_gui(choice, params):
                     inst, freq, v_min, v_max, num_points)
                 all_v.append(voltage); all_cp.append(capacitance); all_d.append(dissipation)
                 if calc_eps:
-                    all_eps_list.append(lcr.compute_eps_r(capacitance, thickness_nm, diameter_um))
+                    all_eps_list.append(lcr.compute_eps_r(capacitance, thickness_nm, area_um2))
 
             file_management.save_cycle_plot(
                 f"C-V Butterfly at {freq:.0f} Hz (LCR)", "Voltage (V)",
@@ -780,8 +772,8 @@ def execute_lcr_gui(choice, params):
         dc_bias_v = float(params.get("dc_bias_v", 0))
         apply_bias = dc_bias_v != 0
         thickness_nm = float(params.get("thickness_nm", 0))
-        diameter_um = float(params.get("diameter_um", 0))
-        calc_eps = thickness_nm > 0 and diameter_um > 0
+        area_um2 = float(params.get("area_um2", 0))
+        calc_eps = thickness_nm > 0 and area_um2 > 0
 
         with InstrumentSession(
             lambda: lcr.setup(measurement_function=mode),
@@ -791,7 +783,7 @@ def execute_lcr_gui(choice, params):
             cap, secondary = lcr.measure_capacitance(inst, freq, mode)
             sec_label = "D" if mode == "CPD" else "Secondary"
             if calc_eps:
-                eps_r = lcr.compute_eps_r(cap, thickness_nm, diameter_um)
+                eps_r = lcr.compute_eps_r(cap, thickness_nm, area_um2)
                 file_management.save_csv("lcr_single_capacitance.csv",
                     np.array([[freq, cap, secondary, eps_r]]),
                     f"frequency_Hz, capacitance_F, {sec_label}, eps_r")
