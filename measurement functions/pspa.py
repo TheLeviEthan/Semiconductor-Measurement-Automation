@@ -364,9 +364,21 @@ def output_off(pspa, channel):
 # =============================
 # Basic sanity checks and a sweep-value generator used by all measurements.
 
-def validate_channel(channel):
+def validate_channel(channel, allow_none=False):
     """Validate channel number is within valid range (1-4 for 4156C)."""
-    if not isinstance(channel, int) or channel < 1 or channel > 4:
+    if channel is None:
+        if allow_none:
+            return None
+        raise ValueError("Channel number is required.")
+
+    # Accept GUI/CLI numeric forms like "2" or 2.0.
+    if not isinstance(channel, int):
+        try:
+            channel = int(float(channel))
+        except Exception as exc:
+            raise ValueError(f"Invalid channel number: {channel}. Must be 1-4.") from exc
+
+    if channel < 1 or channel > 4:
         raise ValueError(f"Invalid channel number: {channel}. Must be 1-4.")
     return channel
 
@@ -423,20 +435,29 @@ def set_integration_time(pspa, time_setting="MED"):
     return setting
 
 def sweep_values(start: float, stop: float, step: float) -> np.ndarray:
-    """Generate sweep values from start to stop with given step."""
+    """Generate sweep values from start to stop with given step magnitude."""
     if step == 0:
         raise ValueError("step must be non-zero")
 
-    n = int(round((stop - start) / step)) + 1
-    # Guard against sign mistakes
-    if n <= 0:
-        return np.array([], dtype=float)
+    if start == stop:
+        return np.array([float(start)], dtype=float)
 
-    vals = start + step * np.arange(n, dtype=float)
+    # Always sweep from start toward stop, regardless of step sign provided by user.
+    signed_step = abs(step) if stop > start else -abs(step)
 
-    # Optional: hard-clip last value to exactly stop (prevents 1e-16 drift)
-    if len(vals) > 0:
-        vals[-1] = stop
+    # Include end point with a small margin for floating-point rounding.
+    vals = np.arange(start, stop + (0.5 * signed_step), signed_step, dtype=float)
+
+    # Ensure first/last values match requested endpoints exactly.
+    if len(vals) == 0:
+        vals = np.array([float(start), float(stop)], dtype=float)
+    else:
+        vals[0] = float(start)
+        if not np.isclose(vals[-1], stop):
+            vals = np.append(vals, float(stop))
+        else:
+            vals[-1] = float(stop)
+
     return vals
 
 # =============================
@@ -459,16 +480,25 @@ def measure_transistor_output_characteristics(pspa, vds_start, vds_stop, vds_ste
     validate_step(vds_step)
     validate_step(vgs_step)
     
-    # Configure channels (Updates global state and enables channels)
+    # 1. Ensure FLEX mode is active and clear outputs from any prior run
+    pspa.write("US")          # Switch to FLEX mode
+    pspa.write("FMT 1")       # Set ASCII format with header
+    pspa.write("CL")          # Force all SMUs off before reconfiguration
+    
+    # 2. Configure channels (Updates global state and enables channels)
     configure_smu(pspa, drain_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, gate_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, source_ch, mode='VOLT', compliance=compliance)
     
-    # Force 0V on source
+    # 3. Force 0V on source
     set_voltage(pspa, source_ch, 0)
     
-    # Enable all relevant channels at once 
+    # 4. Enable all relevant channels at once 
     pspa.write(f"CN {drain_ch},{gate_ch},{source_ch}")
+
+    # Small dwell to allow relays/output state to settle before first read.
+    settle_s = 0.05
+    time.sleep(settle_s)
     
     vds_array = []
     vgs_array = []
@@ -477,13 +507,26 @@ def measure_transistor_output_characteristics(pspa, vds_start, vds_stop, vds_ste
     vgs_values = sweep_values(vgs_start, vgs_stop, vgs_step)
     vds_values = sweep_values(vds_start, vds_stop, vds_step)
 
-    print("Starting Output Characteristics Sweep...")
+    print(f"\n{'='*70}")
+    print("TRANSISTOR OUTPUT CHARACTERISTICS MEASUREMENT")
+    print(f"{'='*70}")
+    print(f"SMU Assignment: Drain=CH{drain_ch}, Gate=CH{gate_ch}, Source=CH{source_ch}")
+    print(f"Measurement Config: FLEX spot reads (TI?), settle={settle_s:.3f}s")
+    print(f"Vds sweep: {vds_start}V → {vds_stop}V (step {vds_step}V)")
+    print(f"Vgs range: {vgs_start}V → {vgs_stop}V (step {vgs_step}V)")
+    print(f"Compliance: {compliance} A")
+    print(f"Starting Output Characteristics Sweep...")
+    print(f"{'='*70}\n")
     
     for vgs in vgs_values:
         set_voltage(pspa, gate_ch, vgs)
+        set_voltage(pspa, source_ch, 0)
+        time.sleep(settle_s)
+        print(f"Vgs = {vgs:.3f}V : ", end="", flush=True)
         
         for vds in vds_values:
             set_voltage(pspa, drain_ch, vds)
+            time.sleep(settle_s)
             
             # TI? executes measurement and returns data 
             id_val = measure_channel_current(pspa, drain_ch)
@@ -491,19 +534,32 @@ def measure_transistor_output_characteristics(pspa, vds_start, vds_stop, vds_ste
             vds_array.append(vds)
             vgs_array.append(vgs)
             id_array.append(id_val)
+            print(".", end="", flush=True)
+        
+        print(f" [{len(vds_values)} points]")
     
     # Disable outputs 
     pspa.write("CL")
+
+    vds_np = np.array(vds_array)
+    vgs_np = np.array(vgs_array)
+    id_np = np.array(id_array)
+
+    # 4155/4156 current sign depends on SMU current direction convention.
+    # Normalize Id so transistor plots and CSVs follow positive drain current.
+    if id_np.size > 0 and np.nanmedian(id_np) < 0:
+        id_np = -id_np
+        print("Note: Id polarity normalized (sign inverted to positive convention).")
     
     return {
-        'Vds': np.array(vds_array),
-        'Vgs': np.array(vgs_array),
-        'Id': np.array(id_array)
+        'Vds': vds_np,
+        'Vgs': vgs_np,
+        'Id': id_np
     }
 
 def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_step,
                                                  vds_constant,
-                                                 drain_ch=1, gate_ch=2, source_ch=3,
+                                                 drain_ch=2, gate_ch=3, source_ch=1,
                                                  compliance=0.1):
     """
     Bidirectional Vgs sweep for transfer characteristics.
@@ -513,15 +569,33 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
     Returns dict with 'Vgs', 'Id', 'Ig', and 'Sweep_Direction' arrays.
     'Sweep_Direction' contains 'forward' or 'reverse' for each data point.
     """
-    print(f"SMU assignment — Drain: CH{drain_ch}, Gate: CH{gate_ch}, Source: CH{source_ch}")
-
+    # Validate inputs
+    validate_channel(drain_ch)
+    validate_channel(gate_ch)
+    validate_channel(source_ch)
+    validate_compliance(compliance)
+    validate_step(vgs_step)
+    
+    # 1. Ensure FLEX mode is active and format is set
+    pspa.write("US")          # Switch to FLEX mode
+    pspa.write("FMT 1")       # Set ASCII format with header
+    
+    # 2. Configure channels
     configure_smu(pspa, drain_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, gate_ch, mode='VOLT', compliance=compliance)
     configure_smu(pspa, source_ch, mode='VOLT', compliance=compliance)
 
+    # 3. Set measurement mode to single-channel spot measurement
+    pspa.write(f"MM 1,{drain_ch}")  # MM 1 = single-channel spot
+    
+    # 4. Set integration time (default to MED)
+    set_integration_time(pspa, INTEGRATION_TIME)
+    
+    # 5. Force constant drain voltage and ground source
     set_voltage(pspa, source_ch, 0)
     set_voltage(pspa, drain_ch, vds_constant)
 
+    # 6. Enable all relevant channels at once
     pspa.write(f"CN {drain_ch},{gate_ch},{source_ch}")
 
     vgs_array = []
@@ -534,9 +608,17 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
     # Reverse sweep: vgs_stop -> vgs_start (step sign flipped)
     reverse_values = sweep_values(vgs_stop, vgs_start, -vgs_step)
 
-    print("Starting Bidirectional Transfer Characteristics Sweep...")
+    print(f"\n{'='*70}")
+    print("TRANSISTOR TRANSFER CHARACTERISTICS MEASUREMENT")
+    print(f"{'='*70}")
+    print(f"SMU Assignment: Drain=CH{drain_ch}, Gate=CH{gate_ch}, Source=CH{source_ch}")
+    print(f"Measurement Config: Spot Mode (MM 1), Integration={INTEGRATION_TIME}")
+    print(f"Vds (constant): {vds_constant}V")
+    print(f"Vgs sweep: {vgs_start}V → {vgs_stop}V (step {vgs_step}V) - Bidirectional")
+    print(f"Compliance: {compliance} A")
+    print(f"{'='*70}\n")
 
-    print(f"  Forward sweep: {vgs_start} V -> {vgs_stop} V")
+    print(f"Forward sweep: {vgs_start}V → {vgs_stop}V : ", end="", flush=True)
     for vgs in forward_values:
         set_voltage(pspa, gate_ch, vgs)
 
@@ -547,8 +629,11 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
         id_array.append(id_val)
         ig_array.append(ig_val)
         direction_array.append('forward')
+        print(".", end="", flush=True)
+    
+    print(f" [{len(forward_values)} points]")
 
-    print(f"  Reverse sweep: {vgs_stop} V -> {vgs_start} V")
+    print(f"Reverse sweep: {vgs_stop}V → {vgs_start}V : ", end="", flush=True)
     for vgs in reverse_values:
         set_voltage(pspa, gate_ch, vgs)
 
@@ -559,14 +644,27 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
         id_array.append(id_val)
         ig_array.append(ig_val)
         direction_array.append('reverse')
+        print(".", end="", flush=True)
+    
+    print(f" [{len(reverse_values)} points]")
 
     pspa.write("CL")
 
+    vgs_np = np.array(vgs_array)
+    id_np = np.array(id_array)
+    ig_np = np.array(ig_array)
+    dir_np = np.array(direction_array)
+
+    # Normalize Id polarity to positive drain current convention.
+    if id_np.size > 0 and np.nanmedian(id_np) < 0:
+        id_np = -id_np
+        print("Note: Id polarity normalized (sign inverted to positive convention).")
+
     return {
-        'Vgs': np.array(vgs_array),
-        'Id': np.array(id_array),
-        'Ig': np.array(ig_array),
-        'Sweep_Direction': np.array(direction_array)
+        'Vgs': vgs_np,
+        'Id': id_np,
+        'Ig': ig_np,
+        'Sweep_Direction': dir_np
     }
 
 # =============================
@@ -579,12 +677,10 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
 def measure_iv_curve(pspa, v_start, v_stop, v_step, channel=1, compliance=0.1,
                      ground_ch=None, integration_time="MED", enable_plot=True):
     # Validate inputs
-    validate_channel(channel)
-    validate_channel(ground_ch)
+    channel = validate_channel(channel)
+    ground_ch = validate_channel(ground_ch, allow_none=True)
     validate_compliance(compliance)
     validate_step(v_step)
-    if ground_ch is not None:
-        validate_channel(ground_ch)
 
     set_integration_time(pspa, integration_time)
     
@@ -642,12 +738,10 @@ def measure_iv_curve(pspa, v_start, v_stop, v_step, channel=1, compliance=0.1,
 def measure_iv_bidirectional(pspa, v_max, v_step, channel=1, compliance=0.1,
                              ground_ch=None, integration_time="MED", enable_plot=True):
     # Validate inputs
-    validate_channel(channel)
-    validate_channel(ground_ch)
+    channel = validate_channel(channel)
+    ground_ch = validate_channel(ground_ch, allow_none=True)
     validate_compliance(compliance)
     validate_step(v_step)
-    if ground_ch is not None:
-        validate_channel(ground_ch)
 
     set_integration_time(pspa, integration_time)
     

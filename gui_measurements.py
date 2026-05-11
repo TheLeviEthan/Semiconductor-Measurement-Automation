@@ -43,6 +43,24 @@ from gpib_utils import InstrumentSession
 log = logging.getLogger(__name__)
 
 
+def _normalize_pspa_choice(choice):
+    """Map reordered PSPA menu indices to legacy execution indices."""
+    choice_map = {
+        1: 1,
+        2: 2,
+        3: 11,
+        4: 3,
+        5: 4,
+        6: 5,
+        7: 6,
+        8: 7,
+        9: 8,
+        10: 9,
+        11: 10,
+    }
+    return choice_map.get(choice, choice)
+
+
 # =============================
 # Helper
 # =============================
@@ -266,6 +284,8 @@ def execute_pia_gui(choice, params):
 def execute_pspa_gui(choice, params):
     """Execute a PSPA measurement using GUI-provided params (no input() calls)."""
 
+    choice = _normalize_pspa_choice(choice)
+
     if choice == 1:
         # Transistor Output Characteristics
         vds_start = float(params.get("vds_start", 0))
@@ -292,21 +312,22 @@ def execute_pspa_gui(choice, params):
                 m = data['Vgs'] == vgs
                 plt.plot(data['Vds'][m], data['Id'][m] * 1e3,
                          marker='o', label=f"Vgs = {vgs:.2f} V")
+            plt.xlim(vds_start, vds_stop)
             plt.xlabel('Vds (V)'); plt.ylabel('Id (mA)')
             plt.title('Transistor Output Characteristics')
             plt.legend(); plt.grid(True); plt.tight_layout()
             file_management.save_plot("transistor_output_chars.png"); plt.close()
 
     elif choice == 2:
-        # Transistor Transfer Characteristics
+        # Transistor Transfer Characteristics (Linear)
         vgs_start = float(params.get("vgs_start", -1))
         vgs_stop = float(params.get("vgs_stop", 3))
         vgs_step = float(params.get("vgs_step", 0.05))
         vds_constant = float(params.get("vds_constant", 5))
         compliance = float(params.get("compliance", 0.1))
-        drain_ch = int(float(params.get("drain_ch", 1)))
-        gate_ch = int(float(params.get("gate_ch", 2)))
-        source_ch = int(float(params.get("source_ch", 3)))
+        drain_ch = int(float(params.get("drain_ch", 2)))
+        gate_ch = int(float(params.get("gate_ch", 3)))
+        source_ch = int(float(params.get("source_ch", 1)))
 
         with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
             data = pspa.measure_transistor_transfer_characteristics(
@@ -318,21 +339,44 @@ def execute_pspa_gui(choice, params):
                 "Vgs_V, Id_A, Ig_A, Sweep_Dir_0fwd_1rev")
             fwd = data['Sweep_Direction'] == 'forward'
             rev = data['Sweep_Direction'] == 'reverse'
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
-            ax1.plot(data['Vgs'][fwd], data['Id'][fwd] * 1e3, marker='o', label='Id (fwd)')
-            ax1.plot(data['Vgs'][rev], data['Id'][rev] * 1e3, marker='s', label='Id (rev)')
-            ax1.set_xlabel('Vgs (V)'); ax1.set_ylabel('Id (mA)')
-            ax1.set_title(f'Transfer Chars (Vds = {vds_constant} V) - Linear')
-            ax1.grid(True); ax1.legend()
-            ax2.semilogy(data['Vgs'][fwd], np.abs(data['Id'][fwd]), marker='o', label='|Id| (fwd)')
-            ax2.semilogy(data['Vgs'][rev], np.abs(data['Id'][rev]), marker='s', label='|Id| (rev)')
-            ax2.semilogy(data['Vgs'][fwd], np.abs(data['Ig'][fwd]), marker='^', label='|Ig| (fwd)')
-            ax2.semilogy(data['Vgs'][rev], np.abs(data['Ig'][rev]), marker='v', label='|Ig| (rev)')
-            ax2.set_xlabel('Vgs (V)'); ax2.set_ylabel('Current (A)')
-            ax2.set_title(f'Transfer Chars (Vds = {vds_constant} V) - Log')
-            ax2.grid(True); ax2.legend()
-            plt.tight_layout()
-            file_management.save_plot("transistor_transfer_chars.png", fig); plt.close()
+            plt.figure(figsize=(10, 6))
+            plt.plot(data['Vgs'][fwd], data['Id'][fwd] * 1e3, marker='o', label='Id (fwd)')
+            plt.plot(data['Vgs'][rev], data['Id'][rev] * 1e3, marker='s', label='Id (rev)')
+            plt.xlabel('Vgs (V)'); plt.ylabel('Id (mA)')
+            plt.title(f'Transfer Chars (Vds = {vds_constant} V) - Linear')
+            plt.grid(True); plt.legend(); plt.tight_layout()
+            file_management.save_plot("transistor_transfer_chars_linear.png"); plt.close()
+
+    elif choice == 11:
+        # Transistor Transfer Characteristics (Log)
+        vgs_start = float(params.get("vgs_start", -1))
+        vgs_stop = float(params.get("vgs_stop", 3))
+        vgs_step = float(params.get("vgs_step", 0.05))
+        vds_constant = float(params.get("vds_constant", 5))
+        compliance = float(params.get("compliance", 0.1))
+        drain_ch = int(float(params.get("drain_ch", 2)))
+        gate_ch = int(float(params.get("gate_ch", 3)))
+        source_ch = int(float(params.get("source_ch", 1)))
+
+        with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
+            data = pspa.measure_transistor_transfer_characteristics(
+                inst, vgs_start, vgs_stop, vgs_step, vds_constant,
+                drain_ch, gate_ch, source_ch, compliance)
+            dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
+            file_management.save_csv("transistor_transfer_chars.csv",
+                np.column_stack([data['Vgs'], data['Id'], data['Ig'], dir_numeric]),
+                "Vgs_V, Id_A, Ig_A, Sweep_Dir_0fwd_1rev")
+            fwd = data['Sweep_Direction'] == 'forward'
+            rev = data['Sweep_Direction'] == 'reverse'
+            plt.figure(figsize=(10, 6))
+            plt.semilogy(data['Vgs'][fwd], np.abs(data['Id'][fwd]), marker='o', label='|Id| (fwd)')
+            plt.semilogy(data['Vgs'][rev], np.abs(data['Id'][rev]), marker='s', label='|Id| (rev)')
+            plt.semilogy(data['Vgs'][fwd], np.abs(data['Ig'][fwd]), marker='^', label='|Ig| (fwd)')
+            plt.semilogy(data['Vgs'][rev], np.abs(data['Ig'][rev]), marker='v', label='|Ig| (rev)')
+            plt.xlabel('Vgs (V)'); plt.ylabel('Current (A)')
+            plt.title(f'Transfer Chars (Vds = {vds_constant} V) - Log')
+            plt.grid(True); plt.legend(); plt.tight_layout()
+            file_management.save_plot("transistor_transfer_chars_log.png"); plt.close()
 
     elif choice == 3:
         # I-V Curve (Unidirectional)
@@ -345,7 +389,8 @@ def execute_pspa_gui(choice, params):
 
         with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
             data = pspa.measure_iv_curve(
-                inst, v_start, v_stop, v_step, channel, compliance,
+                inst, v_start, v_stop, v_step,
+                channel=channel, compliance=compliance,
                 integration_time=integration_time)
             file_management.save_csv("iv_curve.csv",
                 np.column_stack([data['Voltage'], data['Current']]),
@@ -367,7 +412,8 @@ def execute_pspa_gui(choice, params):
 
         with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
             data = pspa.measure_iv_bidirectional(
-                inst, v_max, v_step, channel, compliance,
+                inst, v_max, v_step,
+                channel=channel, compliance=compliance,
                 integration_time=integration_time)
             file_management.save_csv("iv_curve_bidirectional.csv",
                 np.column_stack([data['Voltage'], data['Current']]),

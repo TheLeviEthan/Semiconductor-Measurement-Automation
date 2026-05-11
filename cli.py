@@ -62,6 +62,24 @@ from measurements_config import (
 
 log = logging.getLogger(__name__)
 
+
+def _normalize_pspa_choice(choice):
+    """Map reordered PSPA menu indices to legacy execution indices."""
+    choice_map = {
+        1: 1,
+        2: 2,
+        3: 11,
+        4: 3,
+        5: 4,
+        6: 5,
+        7: 6,
+        8: 7,
+        9: 8,
+        10: 9,
+        11: 10,
+    }
+    return choice_map.get(choice, choice)
+
 # =============================
 # Global Cryo Parameters
 # =============================
@@ -672,6 +690,7 @@ def _prepare_pia_cryo(choice):
 def _prepare_pspa_cryo(choice):
     """Collect PSPA parameters and return (name, executor) for cryo queue."""
     name = pspa_measurements[choice - 1]
+    choice = _normalize_pspa_choice(choice)
     print(f"\n  Configuring: {name}")
 
     if choice == 1:
@@ -683,9 +702,9 @@ def _prepare_pspa_cryo(choice):
         vgs_stop = safe_float_input("Enter stop Vgs (V) [default 3]: ", 3)
         vgs_step = safe_float_input("Enter Vgs step (V) [default 0.5]: ", 0.5)
         compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
-        drain_ch = safe_int_input("Enter drain channel [default 1]: ", 1)
-        gate_ch = safe_int_input("Enter gate channel [default 2]: ", 2)
-        source_ch = safe_int_input("Enter source channel [default 3]: ", 3)
+        drain_ch = safe_int_input("Enter drain SMU channel [default 1]: ", 1)
+        gate_ch = safe_int_input("Enter gate SMU channel [default 2]: ", 2)
+        source_ch = safe_int_input("Enter source SMU channel [default 3]: ", 3)
 
         def run():
             with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
@@ -701,6 +720,7 @@ def _prepare_pspa_cryo(choice):
                     m = data['Vgs'] == vgs
                     plt.plot(data['Vds'][m], data['Id'][m] * 1e3,
                              marker='o', label=f"Vgs = {vgs:.2f} V")
+                plt.xlim(vds_start, vds_stop)
                 plt.xlabel('Vds (V)'); plt.ylabel('Id (mA)')
                 plt.title('Transistor Output Characteristics')
                 plt.legend(); plt.grid(True); plt.tight_layout()
@@ -708,15 +728,15 @@ def _prepare_pspa_cryo(choice):
         return name, run
 
     elif choice == 2:
-        # Transistor Transfer Characteristics
+        # Transistor Transfer Characteristics (Linear)
         vgs_start = safe_float_input("Enter start Vgs (V) [default -1]: ", -1)
         vgs_stop = safe_float_input("Enter stop Vgs (V) [default 3]: ", 3)
         vgs_step = safe_float_input("Enter Vgs step (V) [default 0.05]: ", 0.05)
         vds_constant = safe_float_input("Enter constant Vds (V) [default 5]: ", 5)
         compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
-        drain_ch = safe_int_input("Enter drain channel [default 1]: ", 1)
-        gate_ch = safe_int_input("Enter gate channel [default 2]: ", 2)
-        source_ch = safe_int_input("Enter source channel [default 3]: ", 3)
+        drain_ch = safe_int_input("Enter drain SMU channel [default 2]: ", 2)
+        gate_ch = safe_int_input("Enter gate SMU channel [default 3]: ", 3)
+        source_ch = safe_int_input("Enter source SMU channel [default 1]: ", 1)
 
         def run():
             with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
@@ -730,21 +750,46 @@ def _prepare_pspa_cryo(choice):
                     "Vgs_V, Id_A, Ig_A, Sweep_Dir_0fwd_1rev")
                 fwd = data['Sweep_Direction'] == 'forward'
                 rev = data['Sweep_Direction'] == 'reverse'
-                fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
-                ax1.plot(data['Vgs'][fwd], data['Id'][fwd] * 1e3, marker='o', label='Id (fwd)')
-                ax1.plot(data['Vgs'][rev], data['Id'][rev] * 1e3, marker='s', label='Id (rev)')
-                ax1.set_xlabel('Vgs (V)'); ax1.set_ylabel('Id (mA)')
-                ax1.set_title(f'Transfer Chars (Vds = {vds_constant} V) - Linear')
-                ax1.grid(True); ax1.legend()
-                ax2.semilogy(data['Vgs'][fwd], np.abs(data['Id'][fwd]), marker='o', label='|Id| (fwd)')
-                ax2.semilogy(data['Vgs'][rev], np.abs(data['Id'][rev]), marker='s', label='|Id| (rev)')
-                ax2.semilogy(data['Vgs'][fwd], np.abs(data['Ig'][fwd]), marker='^', label='|Ig| (fwd)')
-                ax2.semilogy(data['Vgs'][rev], np.abs(data['Ig'][rev]), marker='v', label='|Ig| (rev)')
-                ax2.set_xlabel('Vgs (V)'); ax2.set_ylabel('Current (A)')
-                ax2.set_title(f'Transfer Chars (Vds = {vds_constant} V) - Log')
-                ax2.grid(True); ax2.legend()
-                plt.tight_layout()
-                file_management.save_plot("transistor_transfer_chars.png", fig); plt.close()
+                plt.figure(figsize=(10, 6))
+                plt.plot(data['Vgs'][fwd], data['Id'][fwd] * 1e3, marker='o', label='Id (fwd)')
+                plt.plot(data['Vgs'][rev], data['Id'][rev] * 1e3, marker='s', label='Id (rev)')
+                plt.xlabel('Vgs (V)'); plt.ylabel('Id (mA)')
+                plt.title(f'Transfer Chars (Vds = {vds_constant} V) - Linear')
+                plt.grid(True); plt.legend(); plt.tight_layout()
+                file_management.save_plot("transistor_transfer_chars_linear.png"); plt.close()
+        return name, run
+
+    elif choice == 11:
+        # Transistor Transfer Characteristics (Log)
+        vgs_start = safe_float_input("Enter start Vgs (V) [default -1]: ", -1)
+        vgs_stop = safe_float_input("Enter stop Vgs (V) [default 3]: ", 3)
+        vgs_step = safe_float_input("Enter Vgs step (V) [default 0.05]: ", 0.05)
+        vds_constant = safe_float_input("Enter constant Vds (V) [default 5]: ", 5)
+        compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
+        drain_ch = safe_int_input("Enter drain SMU channel [default 2]: ", 2)
+        gate_ch = safe_int_input("Enter gate SMU channel [default 3]: ", 3)
+        source_ch = safe_int_input("Enter source SMU channel [default 1]: ", 1)
+
+        def run():
+            with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
+                data = pspa.measure_transistor_transfer_characteristics(
+                    inst, vgs_start, vgs_stop, vgs_step, vds_constant,
+                    drain_ch, gate_ch, source_ch, compliance)
+                dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
+                file_management.save_csv("transistor_transfer_chars.csv",
+                    np.column_stack([data['Vgs'], data['Id'], data['Ig'], dir_numeric]),
+                    "Vgs_V, Id_A, Ig_A, Sweep_Dir_0fwd_1rev")
+                fwd = data['Sweep_Direction'] == 'forward'
+                rev = data['Sweep_Direction'] == 'reverse'
+                plt.figure(figsize=(10, 6))
+                plt.semilogy(data['Vgs'][fwd], np.abs(data['Id'][fwd]), marker='o', label='|Id| (fwd)')
+                plt.semilogy(data['Vgs'][rev], np.abs(data['Id'][rev]), marker='s', label='|Id| (rev)')
+                plt.semilogy(data['Vgs'][fwd], np.abs(data['Ig'][fwd]), marker='^', label='|Ig| (fwd)')
+                plt.semilogy(data['Vgs'][rev], np.abs(data['Ig'][rev]), marker='v', label='|Ig| (rev)')
+                plt.xlabel('Vgs (V)'); plt.ylabel('Current (A)')
+                plt.title(f'Transfer Chars (Vds = {vds_constant} V) - Log')
+                plt.grid(True); plt.legend(); plt.tight_layout()
+                file_management.save_plot("transistor_transfer_chars_log.png"); plt.close()
         return name, run
 
     elif choice == 3:
@@ -837,9 +882,9 @@ def _prepare_pspa_cryo(choice):
         pulse_period = safe_float_input("Enter pulse period (ms) [default 10]: ", 10) * 1e-3
         num_pulses = safe_int_input("Enter number of pulses [default 10]: ", 10)
         compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
-        drain_ch = safe_int_input("Enter drain channel [default 1]: ", 1)
-        gate_ch = safe_int_input("Enter gate channel [default 2]: ", 2)
-        source_ch = safe_int_input("Enter source channel [default 3]: ", 3)
+        drain_ch = safe_int_input("Enter drain SMU channel [default 1]: ", 1)
+        gate_ch = safe_int_input("Enter gate SMU channel [default 2]: ", 2)
+        source_ch = safe_int_input("Enter source SMU channel [default 3]: ", 3)
 
         def run():
             with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
@@ -891,8 +936,8 @@ def _prepare_pspa_cryo(choice):
         vgs_stop = safe_float_input("Enter stop Vgs (V) [default 5]: ", 5)
         vgs_step = safe_float_input("Enter Vgs step (V) [default 0.1]: ", 0.1)
         compliance = safe_float_input("Enter current compliance (A) [default 1e-3]: ", 1e-3)
-        gate_ch = safe_int_input("Enter gate channel [default 2]: ", 2)
-        source_ch = safe_int_input("Enter source channel [default 3]: ", 3)
+        gate_ch = safe_int_input("Enter gate SMU channel [default 2]: ", 2)
+        source_ch = safe_int_input("Enter source SMU channel [default 3]: ", 3)
 
         def run():
             with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
@@ -1562,6 +1607,7 @@ def run_pspa_measurements():
 
 def execute_pspa_measurement(choice):
     """Execute the selected PSPA measurement."""
+    choice = _normalize_pspa_choice(choice)
     repeating = True
     while repeating:
         if choice == 1:
@@ -1576,9 +1622,9 @@ def execute_pspa_measurement(choice):
             vgs_step = safe_float_input("Enter Vgs step (V) [default 0.5]: ", 0.5)
             compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
             
-            drain_ch = safe_int_input("Enter drain channel [default 1]: ", 1)
-            gate_ch = safe_int_input("Enter gate channel [default 2]: ", 2)
-            source_ch = safe_int_input("Enter source channel [default 3]: ", 3)
+            drain_ch = safe_int_input("Enter drain SMU channel [default 1]: ", 1)
+            gate_ch = safe_int_input("Enter gate SMU channel [default 2]: ", 2)
+            source_ch = safe_int_input("Enter source SMU channel [default 3]: ", 3)
             
             try:
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
@@ -1597,6 +1643,7 @@ def execute_pspa_measurement(choice):
                     for vgs in vgs_values:
                         mask = data['Vgs'] == vgs
                         plt.plot(data['Vds'][mask], data['Id'][mask] * 1e3, marker='o', label=f"Vgs = {vgs:.2f} V")
+                    plt.xlim(vds_start, vds_stop)
                     plt.xlabel('Vds (V)')
                     plt.ylabel('Id (mA)')
                     plt.title('Transistor Output Characteristics')
@@ -1612,8 +1659,8 @@ def execute_pspa_measurement(choice):
                 print(f"Error during measurement: {e}")
 
         elif choice == 2:
-            # PSPA Transistor Transfer Characteristics
-            print("PSPA: Transistor Transfer Characteristics (Id-Vgs curve)")
+            # PSPA Transistor Transfer Characteristics (Linear)
+            print("PSPA: Transistor Transfer Characteristics (Id-Vgs curve, Linear)")
             
             vgs_start = safe_float_input("Enter start Vgs (V) [default -1]: ", -1)
             vgs_stop = safe_float_input("Enter stop Vgs (V) [default 3]: ", 3)
@@ -1621,9 +1668,9 @@ def execute_pspa_measurement(choice):
             vds_constant = safe_float_input("Enter constant Vds (V) [default 5]: ", 5)
             compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
             
-            drain_ch = safe_int_input("Enter drain channel [default 1]: ", 1)
-            gate_ch = safe_int_input("Enter gate channel [default 2]: ", 2)
-            source_ch = safe_int_input("Enter source channel [default 3]: ", 3)
+            drain_ch = safe_int_input("Enter drain SMU channel [default 2]: ", 2)
+            gate_ch = safe_int_input("Enter gate SMU channel [default 3]: ", 3)
+            source_ch = safe_int_input("Enter source SMU channel [default 1]: ", 1)
             
             try:
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
@@ -1640,27 +1687,64 @@ def execute_pspa_measurement(choice):
                     fwd = data['Sweep_Direction'] == 'forward'
                     rev = data['Sweep_Direction'] == 'reverse'
 
-                    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
-                    ax1.plot(data['Vgs'][fwd], data['Id'][fwd] * 1e3, marker='o', label='Id (fwd)')
-                    ax1.plot(data['Vgs'][rev], data['Id'][rev] * 1e3, marker='s', label='Id (rev)')
-                    ax1.set_xlabel('Vgs (V)')
-                    ax1.set_ylabel('Id (mA)')
-                    ax1.set_title(f'Transfer Characteristics (Vds = {vds_constant} V) - Linear')
-                    ax1.grid(True)
-                    ax1.legend()
-
-                    ax2.semilogy(data['Vgs'][fwd], np.abs(data['Id'][fwd]), marker='o', label='|Id| (fwd)')
-                    ax2.semilogy(data['Vgs'][rev], np.abs(data['Id'][rev]), marker='s', label='|Id| (rev)')
-                    ax2.semilogy(data['Vgs'][fwd], np.abs(data['Ig'][fwd]), marker='^', label='|Ig| (fwd)')
-                    ax2.semilogy(data['Vgs'][rev], np.abs(data['Ig'][rev]), marker='v', label='|Ig| (rev)')
-                    ax2.set_xlabel('Vgs (V)')
-                    ax2.set_ylabel('Current (A)')
-                    ax2.set_title(f'Transfer Characteristics (Vds = {vds_constant} V) - Log')
-                    ax2.grid(True)
-                    ax2.legend()
-
+                    plt.figure(figsize=(10, 6))
+                    plt.plot(data['Vgs'][fwd], data['Id'][fwd] * 1e3, marker='o', label='Id (fwd)')
+                    plt.plot(data['Vgs'][rev], data['Id'][rev] * 1e3, marker='s', label='Id (rev)')
+                    plt.xlabel('Vgs (V)')
+                    plt.ylabel('Id (mA)')
+                    plt.title(f'Transfer Characteristics (Vds = {vds_constant} V) - Linear')
+                    plt.grid(True)
+                    plt.legend()
                     plt.tight_layout()
-                    file_management.save_plot("transistor_transfer_chars.png", fig)
+                    file_management.save_plot("transistor_transfer_chars_linear.png")
+                    plt.close()
+
+                    print("Measurement complete. Data saved to output folder.")
+            except Exception as e:
+                log.error("PSPA transfer chars failed: %s", e)
+                print(f"Error during measurement: {e}")
+
+        elif choice == 11:
+            # PSPA Transistor Transfer Characteristics (Log)
+            print("PSPA: Transistor Transfer Characteristics (Id-Vgs curve, Log)")
+
+            vgs_start = safe_float_input("Enter start Vgs (V) [default -1]: ", -1)
+            vgs_stop = safe_float_input("Enter stop Vgs (V) [default 3]: ", 3)
+            vgs_step = safe_float_input("Enter Vgs step (V) [default 0.05]: ", 0.05)
+            vds_constant = safe_float_input("Enter constant Vds (V) [default 5]: ", 5)
+            compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
+
+            drain_ch = safe_int_input("Enter drain SMU channel [default 2]: ", 2)
+            gate_ch = safe_int_input("Enter gate SMU channel [default 3]: ", 3)
+            source_ch = safe_int_input("Enter source SMU channel [default 1]: ", 1)
+
+            try:
+                with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
+                    print("\nRunning transistor transfer characteristics sweep...")
+                    data = pspa.measure_transistor_transfer_characteristics(
+                        pspa_inst, vgs_start, vgs_stop, vgs_step, vds_constant,
+                        drain_ch, gate_ch, source_ch, compliance
+                    )
+
+                    dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
+                    csv_data = np.column_stack([data['Vgs'], data['Id'], data['Ig'], dir_numeric])
+                    file_management.save_csv("transistor_transfer_chars.csv", csv_data, "Vgs_V, Id_A, Ig_A, Sweep_Dir_0fwd_1rev")
+
+                    fwd = data['Sweep_Direction'] == 'forward'
+                    rev = data['Sweep_Direction'] == 'reverse'
+
+                    plt.figure(figsize=(10, 6))
+                    plt.semilogy(data['Vgs'][fwd], np.abs(data['Id'][fwd]), marker='o', label='|Id| (fwd)')
+                    plt.semilogy(data['Vgs'][rev], np.abs(data['Id'][rev]), marker='s', label='|Id| (rev)')
+                    plt.semilogy(data['Vgs'][fwd], np.abs(data['Ig'][fwd]), marker='^', label='|Ig| (fwd)')
+                    plt.semilogy(data['Vgs'][rev], np.abs(data['Ig'][rev]), marker='v', label='|Ig| (rev)')
+                    plt.xlabel('Vgs (V)')
+                    plt.ylabel('Current (A)')
+                    plt.title(f'Transfer Characteristics (Vds = {vds_constant} V) - Log')
+                    plt.grid(True)
+                    plt.legend()
+                    plt.tight_layout()
+                    file_management.save_plot("transistor_transfer_chars_log.png")
                     plt.close()
 
                     print("Measurement complete. Data saved to output folder.")
@@ -1800,9 +1884,9 @@ def execute_pspa_measurement(choice):
             num_pulses = safe_int_input("Enter number of pulses [default 10]: ", 10)
             compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
             
-            drain_ch = safe_int_input("Enter drain channel [default 1]: ", 1)
-            gate_ch = safe_int_input("Enter gate channel [default 2]: ", 2)
-            source_ch = safe_int_input("Enter source channel [default 3]: ", 3)
+            drain_ch = safe_int_input("Enter drain SMU channel [default 1]: ", 1)
+            gate_ch = safe_int_input("Enter gate SMU channel [default 2]: ", 2)
+            source_ch = safe_int_input("Enter source SMU channel [default 3]: ", 3)
             
             try:
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
@@ -1882,8 +1966,8 @@ def execute_pspa_measurement(choice):
             vgs_stop = safe_float_input("Enter stop Vgs (V) [default 5]: ", 5)
             vgs_step = safe_float_input("Enter Vgs step (V) [default 0.1]: ", 0.1)
             compliance = safe_float_input("Enter current compliance (A) [default 1e-3]: ", 1e-3)
-            gate_ch = safe_int_input("Enter gate channel [default 2]: ", 2)
-            source_ch = safe_int_input("Enter source channel [default 3]: ", 3)
+            gate_ch = safe_int_input("Enter gate SMU channel [default 2]: ", 2)
+            source_ch = safe_int_input("Enter source SMU channel [default 3]: ", 3)
 
             try:
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:

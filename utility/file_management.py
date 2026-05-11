@@ -54,6 +54,17 @@ default_output_dir = str((_PROJECT_DIR / ".." / "output").resolve())
 output_dir = default_output_dir
 
 
+def _scale_capacitance_for_display(y_label: str, y_values):
+    """Convert capacitance traces from F to pF for human-readable plots.
+
+    Raw data files remain in SI units (F). This helper only affects plot display.
+    """
+    normalized = y_label.strip().lower()
+    if normalized in {"cp (f)", "capacitance (f)"}:
+        return y_label.replace("(F)", "(pF)"), np.asarray(y_values, dtype=float) * 1e12
+    return y_label, y_values
+
+
 # =============================
 # Path helpers
 # =============================
@@ -165,11 +176,13 @@ def save_image(title: str, axis1_label: str, axis1, axis2_label: str, axis2,
     else:
         title_with_bias = title
 
+    axis2_label_disp, axis2_disp = _scale_capacitance_for_display(axis2_label, axis2)
+
     fig = Figure()
     ax = fig.add_subplot(111)
-    ax.semilogx(axis1, axis2, '-o', markersize=3)
+    ax.semilogx(axis1, axis2_disp, '-o', markersize=3)
     ax.set_xlabel(axis1_label)
-    ax.set_ylabel(axis2_label)
+    ax.set_ylabel(axis2_label_disp)
     ax.set_title(title_with_bias)
     ax.grid(True, which="both")
 
@@ -220,12 +233,19 @@ def save_cycle_plot(title: str, x_label: str, y_label: str,
     images_dir = os.path.join(output_dir, "images")
     ensure_output_dir(images_dir)
 
+    y_label_disp = y_label
+    cycles_y_disp = cycles_y
+    normalized = y_label.strip().lower()
+    if normalized in {"cp (f)", "capacitance (f)"}:
+        y_label_disp = y_label.replace("(F)", "(pF)")
+        cycles_y_disp = [np.asarray(y_vals, dtype=float) * 1e12 for y_vals in cycles_y]
+
     fig = Figure()
     ax = fig.add_subplot(111)
-    for idx, (x_vals, y_vals) in enumerate(zip(cycles_x, cycles_y), start=1):
+    for idx, (x_vals, y_vals) in enumerate(zip(cycles_x, cycles_y_disp), start=1):
         ax.plot(x_vals, y_vals, "-o", markersize=3, label=f"Cycle {idx}")
     ax.set_xlabel(x_label)
-    ax.set_ylabel(y_label)
+    ax.set_ylabel(y_label_disp)
     ax.set_title(title)
     ax.grid(True)
     ax.legend()

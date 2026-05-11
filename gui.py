@@ -173,6 +173,7 @@ class MeasurementGUI:
             ("PIA (Precision Impedance Analyzer)", "PIA"),
             ("PSPA (Parameter/Source Analyzer)", "PSPA"),
             ("LCR (E4980A LCR Meter)", "LCR"),
+            ("Ferro (Switchbox Position D)", "FERRO"),
         ]
         
         for label, value in instruments:
@@ -250,7 +251,12 @@ class MeasurementGUI:
         params_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
         
         self.params_frame = params_scrollable_frame
+        self.params_canvas = params_canvas
         self.param_entries = {}
+        self.param_entries_list = []  # Track entry order for tab traversal
+        
+        # Prevent canvas clicks from deselecting focused entry
+        params_canvas.bind('<Button-1>', self._on_canvas_click)
 
         # --- Measurement Queue Frame (for cryo) ---
         queue_frame = ttk.LabelFrame(main_frame, text="Measurement Queue (Cryo)", padding="10")
@@ -334,8 +340,8 @@ class MeasurementGUI:
     def update_switchbox_status(self, extra_text=""):
         """Refresh switchbox status text in GUI."""
         state = "Enabled" if self.switchbox_enabled_var.get() else "Disabled"
-        port = self.switchbox.settings.port
-        base = f"Status: {state} | Port: {port}"
+        ports = self.switchbox.settings.ports or [self.switchbox.settings.port]
+        base = f"Status: {state} | Ports: {', '.join(ports)}"
         if extra_text:
             base = f"{base} | {extra_text}"
         self.switchbox_status_var.set(base)
@@ -389,12 +395,53 @@ class MeasurementGUI:
             pass
         self.root.destroy()
 
+    def _on_canvas_click(self, event):
+        """Handle canvas click to focus on entry fields if clicked on empty space."""
+        # Only focus the first entry if clicking in empty space (not on a widget)
+        widget = event.widget.winfo_containing(event.x_root, event.y_root)
+        if widget == event.widget and self.param_entries_list:
+            # Clicked on empty canvas area, focus first entry
+            self.param_entries_list[0].focus_set()
+            return 'break'  # Prevent default behavior
+        return 'break'  # Prevent canvas from stealing focus
+    
+    def _on_tab_pressed(self, event):
+        """Handle Tab key to advance to next entry field."""
+        if not self.param_entries_list:
+            return
+        
+        current_widget = event.widget
+        try:
+            current_idx = self.param_entries_list.index(current_widget)
+            next_idx = (current_idx + 1) % len(self.param_entries_list)
+            self.param_entries_list[next_idx].focus_set()
+            self.param_entries_list[next_idx].select_range(0, tk.END)
+            return 'break'  # Prevent default tab behavior
+        except (ValueError, IndexError):
+            pass
+    
+    def _on_shift_tab_pressed(self, event):
+        """Handle Shift+Tab key to go to previous entry field."""
+        if not self.param_entries_list:
+            return
+        
+        current_widget = event.widget
+        try:
+            current_idx = self.param_entries_list.index(current_widget)
+            prev_idx = (current_idx - 1) % len(self.param_entries_list)
+            self.param_entries_list[prev_idx].focus_set()
+            self.param_entries_list[prev_idx].select_range(0, tk.END)
+            return 'break'  # Prevent default shift+tab behavior
+        except (ValueError, IndexError):
+            pass
+
     def populate_default_params(self):
         """Populate parameter frame with default parameters based on selected measurement."""
         # Clear existing parameters
         for widget in self.params_frame.winfo_children():
             widget.destroy()
         self.param_entries.clear()
+        self.param_entries_list.clear()
 
         # Get selected measurement
         try:
@@ -404,6 +451,22 @@ class MeasurementGUI:
                 return
             
             measurement_idx = selection[0] + 1  # 1-indexed
+            if instrument == "PSPA":
+                # Keep PSPA menu order user-friendly while preserving legacy execution/param IDs.
+                pspa_idx_map = {
+                    1: 1,
+                    2: 2,
+                    3: 11,
+                    4: 3,
+                    5: 4,
+                    6: 5,
+                    7: 6,
+                    8: 7,
+                    9: 8,
+                    10: 9,
+                    11: 10,
+                }
+                measurement_idx = pspa_idx_map.get(measurement_idx, measurement_idx)
             params = self.MEASUREMENT_PARAMS.get((instrument, measurement_idx), [])
         except (tk.TclError, IndexError):
             params = []
@@ -425,7 +488,13 @@ class MeasurementGUI:
         entry = ttk.Entry(self.params_frame, width=20)
         entry.insert(0, default)
         entry.grid(row=row, column=1, sticky=tk.W, padx=(10, 0), pady=2)
+        
+        # Bind tab/shift+tab for custom focus traversal
+        entry.bind('<Tab>', self._on_tab_pressed)
+        entry.bind('<Shift-Tab>', self._on_shift_tab_pressed)
+        
         self.param_entries[key] = entry
+        self.param_entries_list.append(entry)
 
     def update_measurement_list(self):
         """Update measurement listbox based on selected instrument."""
@@ -436,8 +505,10 @@ class MeasurementGUI:
             measurements = self.PIA_MEASUREMENTS
         elif instrument == "PSPA":
             measurements = self.PSPA_MEASUREMENTS
-        else:  # LCR
+        elif instrument == "LCR":
             measurements = self.LCR_MEASUREMENTS
+        else:
+            measurements = []
         
         for meas in measurements:
             self.measurement_listbox.insert(tk.END, meas)

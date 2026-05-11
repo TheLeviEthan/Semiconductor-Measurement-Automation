@@ -31,6 +31,7 @@ Typical workflow:
 import pyvisa
 import numpy as np
 import logging
+import config
 
 log = logging.getLogger(__name__)
 
@@ -39,7 +40,8 @@ log = logging.getLogger(__name__)
 # =============================
 # These defaults are used when a measurement function is called without
 # explicit parameters.  They can be overridden at runtime.
-GPIB_ADDRESS = "GPIB0::24::INSTR"   # GPIB address for PIA
+DEFAULT_GPIB_ADDRESS = "GPIB0::24::INSTR"
+GPIB_ADDRESS = str(config.get("gpib", "pia", DEFAULT_GPIB_ADDRESS))
 
 # Default Frequency sweep settings (LOG sweep)
 FREQ_START_HZ = 4e1      # start frequency, Hz (must be >0 for LOG sweep)
@@ -72,10 +74,26 @@ current_parameters = {
 # Functions to connect to the instrument and configure it for a specific
 # measurement mode.  The 4294A is configured by sending plain text commands
 # over the GPIB bus.
-def connect_4294a(resource_name=GPIB_ADDRESS):
+def connect_4294a(resource_name=None):
     """Open VISA session to Agilent 4294A."""
+    target = str(resource_name or config.get("gpib", "pia", GPIB_ADDRESS)).strip()
+    if not target:
+        raise RuntimeError("PIA GPIB address is empty. Set gpib.pia in config.yaml.")
+
     rm = pyvisa.ResourceManager()
-    inst = rm.open_resource(resource_name)
+    try:
+        inst = rm.open_resource(target)
+    except Exception as exc:
+        try:
+            resources = rm.list_resources()
+        except Exception:
+            resources = ()
+        raise RuntimeError(
+            "Failed to open PIA VISA resource "
+            f"'{target}'. Available resources: {resources}. "
+            "Check instrument power/cable, NI-MAX visibility, and gpib.pia in config.yaml."
+        ) from exc
+
     inst.timeout = 120000  # ms
     inst.read_termination = '\n'
     inst.write_termination = '\n'
