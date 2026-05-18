@@ -424,9 +424,13 @@ def set_integration_time(pspa, time_setting="MED"):
     setting = normalize_integration_time(time_setting)
 
     # MATLAB reference uses :PAGE:MEAS:MSET:ITIM {SHOR|MED|LONG}.
-    # Re-enter FLEX mode afterwards because this driver operates primarily in FLEX.
+    # Enter PAGE mode first, then return to FLEX because this driver operates
+    # primarily in FLEX for measurement commands.
     try:
+        pspa.write(":PAGE")
+        time.sleep(0.2)
         pspa.write(f":PAGE:MEAS:MSET:ITIM {setting}")
+        time.sleep(0.1)
         pspa.write("US")
         pspa.write("FMT 1")
     except Exception as e:
@@ -622,7 +626,8 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
     for vgs in forward_values:
         set_voltage(pspa, gate_ch, vgs)
 
-        id_val = measure_channel_current(pspa, gate_ch)
+        # Id must be read from the drain SMU while Vgs is being swept.
+        id_val = measure_channel_current(pspa, drain_ch)
 
         vgs_array.append(vgs)
         id_array.append(id_val)
@@ -635,7 +640,8 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
     for vgs in reverse_values:
         set_voltage(pspa, gate_ch, vgs)
 
-        id_val = measure_channel_current(pspa, gate_ch)
+        # Id must be read from the drain SMU while Vgs is being swept.
+        id_val = measure_channel_current(pspa, drain_ch)
 
         vgs_array.append(vgs)
         id_array.append(id_val)

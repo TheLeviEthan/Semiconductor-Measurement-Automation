@@ -30,6 +30,7 @@ import sys
 import os
 import logging
 import threading
+import time
 
 # Add the 'utility' and 'measurement functions' folders to Python's search
 # path so that module imports work without package prefixes.
@@ -137,6 +138,8 @@ class MeasurementGUI:
     PSPA_MEASUREMENTS = PSPA_MEASUREMENTS
     LCR_MEASUREMENTS = LCR_MEASUREMENTS
     MEASUREMENT_PARAMS = MEASUREMENT_PARAMS
+    QUEUE_DELAY_LABEL = "DELAY (Queue Pause)"
+    QUEUE_DELAY_KEY = "queue_delay_seconds"
 
     def __init__(self, root, measurement_executor):
         """
@@ -157,6 +160,7 @@ class MeasurementGUI:
         # Track cryo state and measurement queue
         self.cryo_enabled = False
         self.measurement_queue = []
+        self.queue_mode_var = tk.StringVar(value="count")
 
         # USB switchbox (multiplexer) control
         self.switchbox = usb_switchbox.create_switchbox_from_config()
@@ -198,6 +202,7 @@ class MeasurementGUI:
         self.main_frame = ttk.Frame(self.main_canvas, padding="10")
         self.main_canvas_window = self.main_canvas.create_window((0, 0), window=self.main_frame, anchor="nw")
         self.main_frame.columnconfigure(1, weight=1)
+        self.main_frame.columnconfigure(2, weight=1)
         # Configure rows to expand/contract proportionally
         self.main_frame.rowconfigure(4, weight=1)  # Measurement selection
         self.main_frame.rowconfigure(5, weight=2)  # Parameters (largest)
@@ -235,11 +240,11 @@ class MeasurementGUI:
         self.cryo_var = tk.BooleanVar(value=False)
         cryo_check = ttk.Checkbutton(self.main_frame, text="Enable Cryogenic Temperature Sweep",
                                      variable=self.cryo_var, command=self.toggle_cryo_params)
-        cryo_check.grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(10, 5))
+        cryo_check.grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=(10, 5))
 
         # --- Cryo Parameters Frame (initially hidden) ---
         cryo_params_frame = ttk.LabelFrame(self.main_frame, text="Cryogenic Parameters", padding="10")
-        cryo_params_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        cryo_params_frame.grid(row=2, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
         cryo_params_frame.columnconfigure(1, weight=1)
         
         self.cryo_params_widgets = []
@@ -381,28 +386,73 @@ class MeasurementGUI:
         # Prevent canvas clicks from deselecting focused entry
         params_canvas.bind('<Button-1>', self._on_canvas_click)
 
-        # --- Measurement Queue Frame (for cryo) ---
-        queue_frame = ttk.LabelFrame(self.main_frame, text="Measurement Queue (Cryo)", padding="10")
-        queue_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 5))
+        # --- Measurement Queue Frame ---
+        queue_frame = ttk.LabelFrame(self.main_frame, text="Measurement Queue", padding="10")
+        queue_frame.grid(row=4, column=2, rowspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(12, 0), pady=(10, 5))
         queue_frame.columnconfigure(0, weight=1)
+        queue_frame.rowconfigure(0, weight=1)
         
         queue_scrollbar = ttk.Scrollbar(queue_frame)
         queue_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
         
         self.queue_listbox = tk.Listbox(
-            queue_frame, height=3, yscrollcommand=queue_scrollbar.set,
+            queue_frame, height=5, yscrollcommand=queue_scrollbar.set,
             exportselection=False
         )
         self.queue_listbox.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         queue_scrollbar.config(command=self.queue_listbox.yview)
+
+        queue_opts = ttk.Frame(queue_frame)
+        queue_opts.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(8, 0))
+
+        ttk.Label(queue_opts, text="Queue Mode:").grid(row=0, column=0, sticky=tk.W)
+        ttk.Radiobutton(
+            queue_opts,
+            text="Number of Loops",
+            variable=self.queue_mode_var,
+            value="count",
+            command=self._update_queue_mode_widgets,
+        ).grid(row=0, column=1, sticky=tk.W, padx=(8, 0))
+        ttk.Radiobutton(
+            queue_opts,
+            text="Duration (H:M:S)",
+            variable=self.queue_mode_var,
+            value="duration",
+            command=self._update_queue_mode_widgets,
+        ).grid(row=0, column=2, sticky=tk.W, padx=(8, 0))
+
+        ttk.Label(queue_opts, text="Number of Loops:").grid(row=1, column=0, sticky=tk.W, pady=(6, 0))
+        self.queue_loop_count_entry = ttk.Entry(queue_opts, width=8)
+        self.queue_loop_count_entry.insert(0, "1")
+        self.queue_loop_count_entry.grid(row=1, column=1, sticky=tk.W, padx=(8, 0), pady=(6, 0))
+
+        ttk.Label(queue_opts, text="Delay Between Loops (s):").grid(row=1, column=2, sticky=tk.W, padx=(12, 0), pady=(6, 0))
+        self.queue_loop_delay_entry = ttk.Entry(queue_opts, width=10)
+        self.queue_loop_delay_entry.insert(0, "0")
+        self.queue_loop_delay_entry.grid(row=1, column=3, sticky=tk.W, padx=(8, 0), pady=(6, 0))
+
+        ttk.Label(queue_opts, text="Duration (H:M:S):").grid(row=2, column=0, sticky=tk.W, pady=(6, 0))
+        duration_frame = ttk.Frame(queue_opts)
+        duration_frame.grid(row=2, column=1, columnspan=2, sticky=tk.W, padx=(8, 0), pady=(6, 0))
+
+        self.queue_duration_hours_entry = ttk.Entry(duration_frame, width=4)
+        self.queue_duration_hours_entry.insert(0, "0")
+        self.queue_duration_hours_entry.grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(duration_frame, text=":").grid(row=0, column=1, padx=2)
+        self.queue_duration_minutes_entry = ttk.Entry(duration_frame, width=4)
+        self.queue_duration_minutes_entry.insert(0, "0")
+        self.queue_duration_minutes_entry.grid(row=0, column=2, sticky=tk.W)
+        ttk.Label(duration_frame, text=":").grid(row=0, column=3, padx=2)
+        self.queue_duration_seconds_entry = ttk.Entry(duration_frame, width=4)
+        self.queue_duration_seconds_entry.insert(0, "0")
+        self.queue_duration_seconds_entry.grid(row=0, column=4, sticky=tk.W)
         
         self.queue_frame = queue_frame
-        self.queue_frame.grid_remove()  # Hide initially
         ttk.Label(self.main_frame, text="Status:", font=("Arial", 10, "bold")).grid(
             row=7, column=0, sticky=(tk.W, tk.N), pady=(10, 5))
         
         log_frame = ttk.Frame(self.main_frame)
-        log_frame.grid(row=7, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 5))
+        log_frame.grid(row=7, column=1, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 5))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
         
@@ -415,35 +465,77 @@ class MeasurementGUI:
         self.status_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         log_scrollbar.config(command=self.status_text.yview)
 
-        # --- Buttons Frame ---
+        # --- Buttons Frame (bottom) ---
         button_frame = ttk.Frame(self.main_frame)
-        button_frame.grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
+        button_frame.grid(row=9, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 0))
         button_frame.columnconfigure(1, weight=1)
-        
-        self.run_btn = ttk.Button(button_frame, text="Run Measurement", command=self.run_measurement)
-        self.run_btn.grid(row=0, column=0, padx=(0, 5))
-        
-        self.queue_btn = ttk.Button(button_frame, text="Queue Measurement", 
-                                    command=self.queue_measurement)
-        self.queue_btn.grid(row=0, column=0, padx=(0, 5))
-        self.queue_btn.grid_remove()  # Hide initially
-        
-        self.start_sweep_btn = ttk.Button(button_frame, text="Start Cryo Sweep",
-                                         command=self.start_cryo_sweep)
-        self.start_sweep_btn.grid(row=0, column=1, padx=(0, 5))
-        self.start_sweep_btn.grid_remove()  # Hide initially
-        
-        self.clear_queue_btn = ttk.Button(button_frame, text="Clear Queue",
-                                         command=self.clear_queue)
-        self.clear_queue_btn.grid(row=0, column=2, padx=(0, 5))
-        self.clear_queue_btn.grid_remove()  # Hide initially
-        
+
+        # Progress bar and Exit remain at the bottom row only
         self.progress_var = tk.DoubleVar()
         progress = ttk.Progressbar(button_frame, variable=self.progress_var, maximum=100)
-        progress.grid(row=0, column=3, sticky=(tk.W, tk.E), padx=(0, 5))
-        
+        progress.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
+
         exit_btn = ttk.Button(button_frame, text="Exit", command=self.on_close)
-        exit_btn.grid(row=0, column=4)
+        exit_btn.grid(row=0, column=2, sticky=tk.E)
+
+        # --- Queue / Action Buttons (moved into queue frame) ---
+        queue_buttons = ttk.Frame(queue_frame)
+        queue_buttons.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(8, 4))
+        queue_buttons.columnconfigure(0, weight=1)
+
+        self.run_btn = ttk.Button(queue_buttons, text="Run Measurement", command=self.run_measurement)
+        self.run_btn.grid(row=0, column=0, padx=(0, 5), sticky=tk.W)
+
+        self.queue_btn = ttk.Button(queue_buttons, text="Queue Measurement", command=self.queue_measurement)
+        self.queue_btn.grid(row=0, column=1, padx=(0, 5), sticky=tk.W)
+        self.queue_btn.grid_remove()  # Hidden until queue mode is active
+
+        self.start_queue_btn = ttk.Button(queue_buttons, text="Start Queue Loop", command=self.start_queue_loop)
+        self.start_queue_btn.grid(row=0, column=2, padx=(0, 5), sticky=tk.W)
+        self.start_queue_btn.grid_remove()
+
+        self.start_sweep_btn = ttk.Button(queue_buttons, text="Start Cryo Sweep", command=self.start_cryo_sweep)
+        self.start_sweep_btn.grid(row=0, column=3, padx=(0, 5), sticky=tk.W)
+        self.start_sweep_btn.grid_remove()  # Hide initially
+
+        self.clear_queue_btn = ttk.Button(queue_buttons, text="Clear Queue", command=self.clear_queue)
+        self.clear_queue_btn.grid(row=0, column=4, padx=(0, 5), sticky=tk.W)
+        self.clear_queue_btn.grid_remove()  # Hidden until queue mode is active
+
+        self.remove_queue_item_btn = ttk.Button(queue_buttons, text="Remove Selected", command=self.remove_selected_queue_item)
+        self.remove_queue_item_btn.grid(row=0, column=5, padx=(0, 5), sticky=tk.W)
+        self.remove_queue_item_btn.grid_remove()  # Hidden until queue mode is active
+
+        self._update_queue_mode_widgets()
+
+    def _measurement_options_for_instrument(self, instrument):
+        """Return selectable measurements plus queue delay pseudo-item."""
+        options = list(get_measurements_list(instrument))
+        options.append(self.QUEUE_DELAY_LABEL)
+        return options
+
+    def _is_delay_selection(self, instrument, idx):
+        """True when current selection corresponds to queue delay pseudo-item."""
+        return idx == len(get_measurements_list(instrument)) + 1
+
+    def _set_queue_controls_enabled(self, enabled):
+        """Enable or disable queue-run related controls."""
+        state = 'normal' if enabled else 'disabled'
+        self.queue_btn.config(state=state)
+        self.start_queue_btn.config(state=state)
+        self.clear_queue_btn.config(state=state)
+        self.remove_queue_item_btn.config(state=state)
+
+    def _update_queue_mode_widgets(self):
+        """Enable only the entry widgets relevant to the selected queue mode."""
+        mode = self.queue_mode_var.get()
+        count_state = 'normal' if mode == 'count' else 'disabled'
+        duration_state = 'normal' if mode == 'duration' else 'disabled'
+
+        self.queue_loop_count_entry.config(state=count_state)
+        self.queue_duration_hours_entry.config(state=duration_state)
+        self.queue_duration_minutes_entry.config(state=duration_state)
+        self.queue_duration_seconds_entry.config(state=duration_state)
 
     def update_switchbox_status(self, extra_text=""):
         """Refresh switchbox status text in GUI."""
@@ -730,9 +822,12 @@ class MeasurementGUI:
             measurement_idx = int(self.measurement_choice_var.get())
             if measurement_idx <= 0:
                 return
-            if instrument == "PSPA":
-                measurement_idx = normalize_pspa_choice(measurement_idx)
-            params = self.MEASUREMENT_PARAMS.get((instrument, measurement_idx), [])
+            if self._is_delay_selection(instrument, measurement_idx):
+                params = [("Delay Time (s)", self.QUEUE_DELAY_KEY, "0")]
+            else:
+                if instrument == "PSPA":
+                    measurement_idx = normalize_pspa_choice(measurement_idx)
+                params = self.MEASUREMENT_PARAMS.get((instrument, measurement_idx), [])
         except (tk.TclError, IndexError):
             params = []
 
@@ -771,7 +866,7 @@ class MeasurementGUI:
         self.measurement_rows.clear()
 
         instrument = self.instrument_var.get()
-        measurements = get_measurements_list(instrument)
+        measurements = self._measurement_options_for_instrument(instrument)
 
         if not measurements:
             self.measurement_choice_var.set(0)
@@ -795,7 +890,11 @@ class MeasurementGUI:
             rb.grid(row=0, column=0, sticky=tk.W)
             self._bind_tab_skip(rb)
 
-            help_icon = self._create_help_icon(row_frame, get_measurement_help(instrument, idx))
+            if self._is_delay_selection(instrument, idx):
+                help_text = "Queue-only item that pauses execution for the specified number of seconds."
+            else:
+                help_text = get_measurement_help(instrument, idx)
+            help_icon = self._create_help_icon(row_frame, help_text)
             help_icon.grid(row=0, column=1, sticky=tk.W, padx=(6, 0))
 
             self.measurement_rows.append(rb)
@@ -819,34 +918,230 @@ class MeasurementGUI:
             self.queue_frame.grid()
             self.run_btn.grid_remove()
             self.queue_btn.grid()
+            self.start_queue_btn.grid_remove()
             self.start_sweep_btn.grid()
             self.clear_queue_btn.grid()
+            self.remove_queue_item_btn.grid()
             self.cryo_enabled = True
             self.update_status("Cryo mode enabled - measurements will be queued")
         else:
             self.cryo_params_frame.grid_remove()
-            self.queue_frame.grid_remove()
+            self.queue_frame.grid()
             self.run_btn.grid()
-            self.queue_btn.grid_remove()
+            self.queue_btn.grid()
+            self.start_queue_btn.grid()
             self.start_sweep_btn.grid_remove()
-            self.clear_queue_btn.grid_remove()
-            self.measurement_queue.clear()
-            self.queue_listbox.delete(0, tk.END)
+            self.clear_queue_btn.grid()
+            self.remove_queue_item_btn.grid()
             self.cryo_enabled = False
-            self.update_status("Cryo mode disabled - running single measurements")
+            self.update_status("Cryo mode disabled - queue loop and single-run enabled")
 
     def queue_measurement(self):
-        """Add the currently selected measurement (with its parameters) to the cryo queue."""
+        """Add the currently selected measurement (or queue delay) to the queue."""
         try:
             instrument = self.instrument_var.get()
             measurement_idx, measurement_name = self.get_selected_measurement()
             params = self.get_params_dict()  # Capture params at queue time
-            
+
+            if self._is_delay_selection(instrument, measurement_idx):
+                if self.cryo_enabled:
+                    raise ValueError("Delay queue items are only available in non-cryo queue mode.")
+                delay_s = float(params.get(self.QUEUE_DELAY_KEY, 0.0))
+                if delay_s < 0:
+                    raise ValueError("Delay time must be >= 0 seconds.")
+
+                delay_item = ("DELAY", 0, self.QUEUE_DELAY_LABEL, {"delay_s": delay_s})
+                self.measurement_queue.append(delay_item)
+                self.queue_listbox.insert(tk.END, f"[DELAY] {delay_s:.3f} s")
+                self.update_status(f"Queued delay: {delay_s:.3f} s")
+                return
+
             self.measurement_queue.append((instrument, measurement_idx, measurement_name, params))
             self.queue_listbox.insert(tk.END, f"[{instrument}] {measurement_name}")
             self.update_status(f"Queued: [{instrument}] {measurement_name}")
         except ValueError as e:
             messagebox.showerror("Input Error", str(e))
+
+    def _execute_queued_item(self, instrument, meas_idx, meas_params):
+        """Execute one queued measurement item and return latest image path if available."""
+        with _suppress_console_output():
+            self.route_switchbox(instrument, raise_on_error=True)
+            return self.measurement_executor(instrument, meas_idx, meas_params)
+
+    def _parse_queue_runtime_settings(self):
+        """Parse and validate queue runtime mode settings."""
+        mode = self.queue_mode_var.get()
+        loop_delay_s = float(self.queue_loop_delay_entry.get())
+        if loop_delay_s < 0:
+            raise ValueError("Delay between loops must be >= 0 seconds.")
+
+        if mode == "count":
+            loop_count = int(float(self.queue_loop_count_entry.get()))
+            if loop_count <= 0:
+                raise ValueError("Number of loops must be a positive integer.")
+            return {
+                "mode": "count",
+                "loop_count": loop_count,
+                "loop_delay_s": loop_delay_s,
+                "duration_s": None,
+            }
+
+        hours = int(float(self.queue_duration_hours_entry.get()))
+        minutes = int(float(self.queue_duration_minutes_entry.get()))
+        seconds = float(self.queue_duration_seconds_entry.get())
+        if hours < 0 or minutes < 0 or seconds < 0:
+            raise ValueError("Duration values must be non-negative.")
+        duration_s = (hours * 3600) + (minutes * 60) + seconds
+        if duration_s <= 0:
+            raise ValueError("Duration must be greater than zero.")
+
+        return {
+            "mode": "duration",
+            "loop_count": None,
+            "loop_delay_s": loop_delay_s,
+            "duration_s": duration_s,
+        }
+
+    def start_queue_loop(self):
+        """Start non-cryo queue looping in a background thread."""
+        if self.cryo_enabled:
+            messagebox.showerror("Unavailable", "Disable cryo mode to run queue loop mode.")
+            return
+
+        if not self.measurement_queue:
+            messagebox.showerror("Empty Queue", "Please queue at least one item before starting queue loop mode.")
+            return
+
+        try:
+            settings = self._parse_queue_runtime_settings()
+            output_dir = self.output_dir_var.get()
+            file_management.set_output_dir(output_dir)
+            file_management.ensure_output_dir(output_dir)
+
+            if settings["mode"] == "count":
+                self.update_status(f"Starting queue loop mode: {settings['loop_count']} loop(s)")
+            else:
+                self.update_status(f"Starting queue duration mode: {settings['duration_s']:.1f} s")
+            self.update_status(f"Delay between loops: {settings['loop_delay_s']:.3f} s")
+
+            self.run_btn.config(state='disabled')
+            self._set_queue_controls_enabled(False)
+            self.progress_var.set(0)
+
+            thread = threading.Thread(target=self._run_queue_loop_thread, args=(settings,))
+            thread.daemon = True
+            thread.start()
+        except ValueError as e:
+            messagebox.showerror("Input Error", str(e))
+        except Exception as e:
+            messagebox.showerror("Error", f"Error: {str(e)}")
+            self.run_btn.config(state='normal')
+            self._set_queue_controls_enabled(True)
+            self.progress_var.set(0)
+
+    def _run_queue_loop_thread(self, settings):
+        """Background worker for non-cryo queue loop execution."""
+        def _restore_buttons():
+            self.run_btn.config(state='normal')
+            self._set_queue_controls_enabled(True)
+
+        try:
+            mode = settings["mode"]
+            loop_count = settings["loop_count"]
+            loop_delay_s = settings["loop_delay_s"]
+            duration_s = settings["duration_s"]
+
+            t0 = time.monotonic()
+            completed_loops = 0
+            stop_due_duration = False
+
+            while True:
+                elapsed = time.monotonic() - t0
+                if mode == "count":
+                    if completed_loops >= loop_count:
+                        break
+                else:
+                    if elapsed >= duration_s:
+                        break
+
+                completed_loops += 1
+                self.update_status(f"\n--- Queue loop {completed_loops} ---")
+
+                n_items = len(self.measurement_queue)
+                for item_idx, (instrument, meas_idx, meas_name, meas_params) in enumerate(self.measurement_queue, 1):
+                    if mode == "duration":
+                        elapsed = time.monotonic() - t0
+                        if elapsed >= duration_s:
+                            stop_due_duration = True
+                            break
+
+                    if instrument == "DELAY":
+                        delay_s = float(meas_params.get("delay_s", 0.0))
+                        if delay_s > 0:
+                            if mode == "duration":
+                                remaining = max(0.0, duration_s - (time.monotonic() - t0))
+                                if remaining <= 0:
+                                    stop_due_duration = True
+                                    break
+                                sleep_s = min(delay_s, remaining)
+                            else:
+                                sleep_s = delay_s
+
+                            self.update_status(f"  [{item_idx}/{n_items}] Delay {sleep_s:.3f} s")
+                            time.sleep(sleep_s)
+                        continue
+
+                    self.update_status(f"  [{item_idx}/{n_items}] [{instrument}] {meas_name}...")
+                    try:
+                        image_path = self._execute_queued_item(instrument, meas_idx, meas_params)
+                        self.update_status(f"  [{item_idx}/{n_items}] Complete")
+                        if image_path:
+                            self.display_image(image_path)
+                    except Exception as e:
+                        log.error("Queued measurement failed: %s", e)
+                        self.update_status(f"  [{item_idx}/{n_items}] FAILED: {e}")
+
+                if mode == "count":
+                    progress = (completed_loops / loop_count) * 100.0
+                else:
+                    progress = min(((time.monotonic() - t0) / duration_s) * 100.0, 100.0)
+                self.root.after(0, lambda p=progress: self.progress_var.set(p))
+
+                if stop_due_duration:
+                    break
+
+                more_loops_pending = (
+                    (mode == "count" and completed_loops < loop_count)
+                    or (mode == "duration" and (time.monotonic() - t0) < duration_s)
+                )
+                if loop_delay_s > 0 and more_loops_pending:
+                    target_resume = time.monotonic() + loop_delay_s
+                    remaining = target_resume - time.monotonic()
+                    if mode == "duration":
+                        remaining_budget = duration_s - (time.monotonic() - t0)
+                        remaining = min(remaining, max(0.0, remaining_budget))
+                    if remaining > 0:
+                        self.update_status(f"Loop delay: {remaining:.3f} s")
+                        time.sleep(remaining)
+
+            if mode == "count":
+                self.update_status(f"\n✓ Queue loop complete ({completed_loops} loop(s))")
+            else:
+                self.update_status(f"\n✓ Queue duration complete (elapsed {time.monotonic() - t0:.1f} s)")
+
+            self.root.after(0, lambda: self.progress_var.set(100))
+            self.root.after(1000, lambda: self.progress_var.set(0))
+
+        except Exception as e:
+            log.error("Queue loop error: %s", e)
+            error_msg = str(e)
+            self.update_status(f"✗ Queue loop failed: {error_msg}")
+            self.root.after(0, lambda: [
+                self.progress_var.set(0),
+                messagebox.showerror("Queue Loop Error", f"Queue loop failed:\n\n{error_msg}"),
+            ])
+        finally:
+            self.root.after(0, _restore_buttons)
 
     def clear_queue(self):
         """Clear all queued measurements."""
@@ -859,10 +1154,38 @@ class MeasurementGUI:
             self.queue_listbox.delete(0, tk.END)
             self.update_status("Queue cleared")
 
+    def remove_selected_queue_item(self):
+        """Remove the selected queue item from both the listbox and queue storage."""
+        selection = self.queue_listbox.curselection()
+        if not selection:
+            messagebox.showinfo("No Selection", "Select a queue item to remove.")
+            return
+
+        idx = selection[0]
+        if idx < 0 or idx >= len(self.measurement_queue):
+            messagebox.showerror("Queue Error", "Selected queue item is invalid.")
+            return
+
+        instrument, _meas_idx, meas_name, meas_params = self.measurement_queue.pop(idx)
+        self.queue_listbox.delete(idx)
+
+        if instrument == "DELAY":
+            delay_s = float(meas_params.get("delay_s", 0.0))
+            self.update_status(f"Removed queue item: [DELAY] {delay_s:.3f} s")
+        else:
+            self.update_status(f"Removed queue item: [{instrument}] {meas_name}")
+
     def start_cryo_sweep(self):
         """Validate cryo parameters and launch the temperature sweep in a background thread."""
         if not self.measurement_queue:
             messagebox.showerror("Empty Queue", "Please queue at least one measurement before starting sweep.")
+            return
+
+        if any(item[0] == "DELAY" for item in self.measurement_queue):
+            messagebox.showerror(
+                "Invalid Queue Item",
+                "Delay queue items are not supported in cryogenic sweep mode.",
+            )
             return
         
         try:
@@ -894,6 +1217,8 @@ class MeasurementGUI:
             self.queue_btn.config(state='disabled')
             self.start_sweep_btn.config(state='disabled')
             self.clear_queue_btn.config(state='disabled')
+            self.start_queue_btn.config(state='disabled')
+            self.remove_queue_item_btn.config(state='disabled')
             self.progress_var.set(50)
             
             # Run sweep in background thread
@@ -911,6 +1236,8 @@ class MeasurementGUI:
             self.queue_btn.config(state='normal')
             self.start_sweep_btn.config(state='normal')
             self.clear_queue_btn.config(state='normal')
+            self.start_queue_btn.config(state='normal')
+            self.remove_queue_item_btn.config(state='normal')
             self.progress_var.set(0)
 
     def _run_cryo_sweep_thread(self, temp_end, meas_interval, ramp_rate):
@@ -919,6 +1246,8 @@ class MeasurementGUI:
             self.queue_btn.config(state='normal')
             self.start_sweep_btn.config(state='normal')
             self.clear_queue_btn.config(state='normal')
+            self.start_queue_btn.config(state='normal')
+            self.remove_queue_item_btn.config(state='normal')
 
         try:
             import cryo
@@ -1033,7 +1362,7 @@ class MeasurementGUI:
         idx = int(self.measurement_choice_var.get())
         if idx <= 0:
             raise ValueError("No measurement selected")
-        measurements = get_measurements_list(self.instrument_var.get())
+        measurements = self._measurement_options_for_instrument(self.instrument_var.get())
         if idx > len(measurements):
             raise ValueError("Selected measurement is unavailable")
         return idx, measurements[idx - 1]
@@ -1122,6 +1451,8 @@ class MeasurementGUI:
             # Validate selections
             instrument = self.instrument_var.get()
             measurement_idx, measurement_name = self.get_selected_measurement()
+            if self._is_delay_selection(instrument, measurement_idx):
+                raise ValueError("Delay is a queue-only item. Queue it and use Start Queue Loop.")
             output_dir = self.output_dir_var.get()
 
             with _suppress_console_output():
