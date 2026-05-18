@@ -332,12 +332,28 @@ class MeasurementGUI:
         self.instrument_tools_frame.bind("<Configure>", self._layout_instrument_buttons)
         self.root.after_idle(self._layout_instrument_buttons)
 
-        # --- Measurement Selection ---
-        ttk.Label(self.main_frame, text="Measurement:", font=("Arial", 10, "bold")).grid(
-            row=4, column=0, sticky=(tk.W, tk.N), pady=(10, 5))
+        # --- Split area: Measurements + Parameters (left) and Queue (right) ---
+        paned = ttk.PanedWindow(self.main_frame, orient=tk.HORIZONTAL)
+        paned.grid(row=4, column=0, columnspan=3, rowspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 5))
 
-        measurement_outer = ttk.Frame(self.main_frame)
-        measurement_outer.grid(row=4, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 5))
+        left_pane = ttk.Frame(paned)
+        right_pane = ttk.Frame(paned)
+        paned.add(left_pane, weight=3)
+        paned.add(right_pane, weight=1)
+
+        # Make panes expand sensibly
+        left_pane.columnconfigure(0, weight=1)
+        left_pane.rowconfigure(0, weight=1)
+        left_pane.rowconfigure(1, weight=2)
+        right_pane.columnconfigure(0, weight=1)
+        right_pane.rowconfigure(0, weight=1)
+
+        # Left pane: Measurement Selection
+        ttk.Label(left_pane, text="Measurement:", font=("Arial", 10, "bold")).grid(
+            row=0, column=0, sticky=(tk.W, tk.N), pady=(0, 5))
+
+        measurement_outer = ttk.Frame(left_pane)
+        measurement_outer.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 5))
         measurement_outer.columnconfigure(0, weight=1)
         measurement_outer.rowconfigure(0, weight=1)
 
@@ -354,12 +370,12 @@ class MeasurementGUI:
             lambda event: self.measurement_canvas.configure(scrollregion=self.measurement_canvas.bbox("all")),
         )
 
-        # --- Parameters Frame (Scrollable) ---
-        ttk.Label(self.main_frame, text="Parameters:", font=("Arial", 10, "bold")).grid(
-            row=5, column=0, sticky=(tk.W, tk.N), pady=(10, 5))
+        # Left pane: Parameters
+        ttk.Label(left_pane, text="Parameters:", font=("Arial", 10, "bold")).grid(
+            row=2, column=0, sticky=(tk.W, tk.N), pady=(6, 5))
         
-        params_outer = ttk.Frame(self.main_frame)
-        params_outer.grid(row=5, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 5))
+        params_outer = ttk.Frame(left_pane)
+        params_outer.grid(row=3, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 5))
         params_outer.columnconfigure(0, weight=1)
         params_outer.rowconfigure(0, weight=1)
         
@@ -387,8 +403,14 @@ class MeasurementGUI:
         params_canvas.bind('<Button-1>', self._on_canvas_click)
 
         # --- Measurement Queue Frame ---
-        queue_frame = ttk.LabelFrame(self.main_frame, text="Measurement Queue", padding="10")
-        queue_frame.grid(row=4, column=2, rowspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(12, 0), pady=(10, 5))
+        queue_frame = ttk.LabelFrame(right_pane, text="Measurement Queue", padding="10")
+        queue_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(8, 0), pady=(0, 5))
+
+        # Set an initial sash position after the window is realized so queue isn't clipped
+        try:
+            self.root.after_idle(lambda: paned.sashpos(0, int(self.main_frame.winfo_width() * 0.66)))
+        except Exception:
+            pass
         queue_frame.columnconfigure(0, weight=1)
         queue_frame.rowconfigure(0, weight=1)
         
@@ -401,6 +423,8 @@ class MeasurementGUI:
         )
         self.queue_listbox.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         queue_scrollbar.config(command=self.queue_listbox.yview)
+        # Track per-item statuses aligned with self.measurement_queue
+        self.queue_statuses = []
 
         queue_opts = ttk.Frame(queue_frame)
         queue_opts.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(8, 0))
@@ -448,6 +472,19 @@ class MeasurementGUI:
         self.queue_duration_seconds_entry.grid(row=0, column=4, sticky=tk.W)
         
         self.queue_frame = queue_frame
+        # Run history (most recent at top)
+        ttk.Label(queue_frame, text="Run History:").grid(row=3, column=0, sticky=tk.W, pady=(8, 0))
+        history_frame = ttk.Frame(queue_frame)
+        history_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(4, 0))
+        history_frame.columnconfigure(0, weight=1)
+        history_scroll = ttk.Scrollbar(history_frame)
+        history_scroll.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        self.history_listbox = tk.Listbox(history_frame, height=6, yscrollcommand=history_scroll.set)
+        self.history_listbox.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        history_scroll.config(command=self.history_listbox.yview)
+        self.history_listbox.bind('<Double-Button-1>', lambda e: self._open_selected_history_item())
+
+        self.run_history = []
         ttk.Label(self.main_frame, text="Status:", font=("Arial", 10, "bold")).grid(
             row=7, column=0, sticky=(tk.W, tk.N), pady=(10, 5))
         
@@ -506,7 +543,18 @@ class MeasurementGUI:
         self.remove_queue_item_btn.grid(row=0, column=5, padx=(0, 5), sticky=tk.W)
         self.remove_queue_item_btn.grid_remove()  # Hidden until queue mode is active
 
+        # Save / Load queued presets
+        self.save_queue_btn = ttk.Button(queue_buttons, text="Save Queue", command=self.save_queue_to_file)
+        self.save_queue_btn.grid(row=1, column=0, padx=(0,5), pady=(6,0), sticky=tk.W)
+        self.load_queue_btn = ttk.Button(queue_buttons, text="Load Queue", command=self.load_queue_from_file)
+        self.load_queue_btn.grid(row=1, column=1, padx=(0,5), pady=(6,0), sticky=tk.W)
+
         self._update_queue_mode_widgets()
+        # Keyboard shortcuts
+        self.root.bind_all('<Control-r>', lambda e: self.run_measurement())
+        self.root.bind_all('<Control-q>', lambda e: self.queue_measurement())
+        self.root.bind_all('<Control-l>', lambda e: self.start_queue_loop())
+        self.root.bind_all('<Delete>', lambda e: self.remove_selected_queue_item())
 
     def _measurement_options_for_instrument(self, instrument):
         """Return selectable measurements plus queue delay pseudo-item."""
@@ -525,6 +573,8 @@ class MeasurementGUI:
         self.start_queue_btn.config(state=state)
         self.clear_queue_btn.config(state=state)
         self.remove_queue_item_btn.config(state=state)
+        self.save_queue_btn.config(state=state)
+        self.load_queue_btn.config(state=state)
 
     def _update_queue_mode_widgets(self):
         """Enable only the entry widgets relevant to the selected queue mode."""
@@ -536,6 +586,12 @@ class MeasurementGUI:
         self.queue_duration_hours_entry.config(state=duration_state)
         self.queue_duration_minutes_entry.config(state=duration_state)
         self.queue_duration_seconds_entry.config(state=duration_state)
+        # Keep save/load always enabled
+        try:
+            self.save_queue_btn.config(state='normal')
+            self.load_queue_btn.config(state='normal')
+        except Exception:
+            pass
 
     def update_switchbox_status(self, extra_text=""):
         """Refresh switchbox status text in GUI."""
@@ -848,14 +904,40 @@ class MeasurementGUI:
         ttk.Label(label_frame, text=label, font=("Arial", 9)).grid(row=0, column=0, sticky=tk.W)
         help_icon = self._create_help_icon(label_frame, get_parameter_help(key, label))
         help_icon.grid(row=0, column=1, sticky=tk.W, padx=(5, 0))
-        entry = ttk.Entry(self.params_frame, width=20)
-        entry.insert(0, default)
+        entry_var = tk.StringVar(value=default)
+        entry = ttk.Entry(self.params_frame, width=20, textvariable=entry_var)
         entry.grid(row=row, column=1, sticky=tk.W, padx=(10, 0), pady=2)
-        
+
+        # Inline validation label (hidden when valid)
+        error_label = ttk.Label(self.params_frame, text="", foreground="red")
+        error_label.grid(row=row, column=2, sticky=tk.W, padx=(6,0))
+
         # Bind tab/shift+tab for custom focus traversal
         entry.bind('<Tab>', self._on_tab_pressed)
         entry.bind('<Shift-Tab>', self._on_shift_tab_pressed)
-        
+
+        # If default looks numeric, enable live numeric validation
+        is_numeric_field = False
+        try:
+            float(default)
+            is_numeric_field = True
+        except Exception:
+            is_numeric_field = False
+
+        if is_numeric_field:
+            def _on_param_change(*_):
+                val = entry_var.get().strip()
+                if val == "":
+                    error_label.config(text="")
+                    return
+                try:
+                    float(val)
+                    error_label.config(text="")
+                except Exception:
+                    error_label.config(text="Invalid number")
+
+            entry_var.trace_add('write', _on_param_change)
+
         self.param_entries[key] = entry
         self.param_entries_list.append(entry)
 
@@ -952,11 +1034,13 @@ class MeasurementGUI:
 
                 delay_item = ("DELAY", 0, self.QUEUE_DELAY_LABEL, {"delay_s": delay_s})
                 self.measurement_queue.append(delay_item)
+                self.queue_statuses.append('queued')
                 self.queue_listbox.insert(tk.END, f"[DELAY] {delay_s:.3f} s")
                 self.update_status(f"Queued delay: {delay_s:.3f} s")
                 return
 
             self.measurement_queue.append((instrument, measurement_idx, measurement_name, params))
+            self.queue_statuses.append('queued')
             self.queue_listbox.insert(tk.END, f"[{instrument}] {measurement_name}")
             self.update_status(f"Queued: [{instrument}] {measurement_name}")
         except ValueError as e:
@@ -1001,6 +1085,119 @@ class MeasurementGUI:
             "loop_delay_s": loop_delay_s,
             "duration_s": duration_s,
         }
+
+    # ---- Queue display and persistence helpers ----
+    def _set_queue_item_status(self, idx, status):
+        try:
+            self.queue_statuses[idx] = status
+        except Exception:
+            return
+        self._refresh_queue_display()
+
+    def _refresh_queue_display(self):
+        # Rebuild visible listbox entries with status icons
+        self.queue_listbox.delete(0, tk.END)
+        icon_map = {
+            'queued': '⏳',
+            'running': '▶',
+            'done': '✓',
+            'failed': '✖',
+            'delay': '⏸',
+        }
+        for i, item in enumerate(self.measurement_queue):
+            status = self.queue_statuses[i] if i < len(self.queue_statuses) else 'queued'
+            icon = icon_map.get(status, '')
+            if item[0] == 'DELAY':
+                text = f"{icon} [DELAY] {float(item[3].get('delay_s',0.0)):.3f} s"
+            else:
+                text = f"{icon} [{item[0]}] {item[2]}"
+            self.queue_listbox.insert(tk.END, text)
+
+    def _add_history_entry(self, instrument, meas_name, params, image_path=None):
+        import datetime
+        entry = {
+            'time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'instrument': instrument,
+            'measurement': meas_name,
+            'params': params,
+            'image': image_path,
+        }
+        # Prepend to history
+        self.run_history.insert(0, entry)
+        # Keep last 200 entries
+        if len(self.run_history) > 200:
+            self.run_history = self.run_history[:200]
+        self._refresh_history_display()
+
+    def _refresh_history_display(self):
+        self.history_listbox.delete(0, tk.END)
+        for entry in self.run_history:
+            img_flag = '🖼' if entry.get('image') else ''
+            text = f"{entry['time']} {img_flag} [{entry['instrument']}] {entry['measurement']}"
+            self.history_listbox.insert(tk.END, text)
+
+    def _open_selected_history_item(self):
+        sel = self.history_listbox.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        try:
+            entry = self.run_history[idx]
+            img = entry.get('image')
+            if img and os.path.exists(img):
+                try:
+                    os.startfile(img)
+                except Exception:
+                    messagebox.showinfo("Open File", f"Image: {img}")
+            else:
+                messagebox.showinfo("History Item", f"No image available.\nParams: {entry.get('params')}" )
+        except Exception as e:
+            log.error("Failed to open history item: %s", e)
+
+    def save_queue_to_file(self):
+        if not self.measurement_queue:
+            messagebox.showinfo("Save Queue", "Queue is empty.")
+            return
+        filepath = filedialog.asksaveasfilename(defaultextension='.json', filetypes=[('JSON','*.json')], title='Save Queue')
+        if not filepath:
+            return
+        serial = []
+        for item in self.measurement_queue:
+            if item[0] == 'DELAY':
+                serial.append({'type':'delay','delay_s': float(item[3].get('delay_s',0.0))})
+            else:
+                serial.append({'type':'meas','instrument':item[0],'idx':item[1],'name':item[2],'params':item[3]})
+        try:
+            import json
+            with open(filepath, 'w') as f:
+                json.dump(serial, f, indent=2)
+            self.update_status(f"Queue saved to {filepath}")
+        except Exception as e:
+            messagebox.showerror("Save Error", str(e))
+
+    def load_queue_from_file(self):
+        filepath = filedialog.askopenfilename(defaultextension='.json', filetypes=[('JSON','*.json')], title='Load Queue')
+        if not filepath:
+            return
+        try:
+            import json
+            with open(filepath, 'r') as f:
+                serial = json.load(f)
+            self.measurement_queue.clear()
+            self.queue_statuses.clear()
+            for entry in serial:
+                if entry.get('type') == 'delay':
+                    item = ('DELAY', 0, self.QUEUE_DELAY_LABEL, {'delay_s': float(entry.get('delay_s',0.0))})
+                    self.measurement_queue.append(item)
+                    self.queue_statuses.append('queued')
+                else:
+                    item = (entry.get('instrument'), entry.get('idx'), entry.get('name'), entry.get('params', {}))
+                    self.measurement_queue.append(item)
+                    self.queue_statuses.append('queued')
+            self._refresh_queue_display()
+            self.update_status(f"Loaded queue from {filepath}")
+        except Exception as e:
+            messagebox.showerror("Load Error", str(e))
 
     def start_queue_loop(self):
         """Start non-cryo queue looping in a background thread."""
@@ -1075,6 +1272,10 @@ class MeasurementGUI:
                             stop_due_duration = True
                             break
 
+                    list_idx = item_idx - 1
+                    # mark running
+                    self._set_queue_item_status(list_idx, 'running')
+
                     if instrument == "DELAY":
                         delay_s = float(meas_params.get("delay_s", 0.0))
                         if delay_s > 0:
@@ -1086,20 +1287,28 @@ class MeasurementGUI:
                                 sleep_s = min(delay_s, remaining)
                             else:
                                 sleep_s = delay_s
-
                             self.update_status(f"  [{item_idx}/{n_items}] Delay {sleep_s:.3f} s")
+                            self._set_queue_item_status(list_idx, 'delay')
                             time.sleep(sleep_s)
+                            self._set_queue_item_status(list_idx, 'done')
                         continue
 
                     self.update_status(f"  [{item_idx}/{n_items}] [{instrument}] {meas_name}...")
                     try:
                         image_path = self._execute_queued_item(instrument, meas_idx, meas_params)
                         self.update_status(f"  [{item_idx}/{n_items}] Complete")
+                        self._set_queue_item_status(list_idx, 'done')
                         if image_path:
                             self.display_image(image_path)
+                            # record history for queued measurement
+                            try:
+                                self._add_history_entry(instrument, meas_name, meas_params, image_path)
+                            except Exception:
+                                pass
                     except Exception as e:
                         log.error("Queued measurement failed: %s", e)
                         self.update_status(f"  [{item_idx}/{n_items}] FAILED: {e}")
+                        self._set_queue_item_status(list_idx, 'failed')
 
                 if mode == "count":
                     progress = (completed_loops / loop_count) * 100.0
@@ -1151,6 +1360,7 @@ class MeasurementGUI:
         
         if messagebox.askyesno("Clear Queue", "Clear all queued measurements?"):
             self.measurement_queue.clear()
+            self.queue_statuses.clear()
             self.queue_listbox.delete(0, tk.END)
             self.update_status("Queue cleared")
 
@@ -1167,6 +1377,10 @@ class MeasurementGUI:
             return
 
         instrument, _meas_idx, meas_name, meas_params = self.measurement_queue.pop(idx)
+        try:
+            del self.queue_statuses[idx]
+        except Exception:
+            pass
         self.queue_listbox.delete(idx)
 
         if instrument == "DELAY":
@@ -1498,6 +1712,11 @@ class MeasurementGUI:
             if image_path:
                 self.display_image(image_path)
                 self.update_status(f"  Image saved to: {image_path}")
+                # record history
+                try:
+                    self._add_history_entry(instrument, measurement_name, params, image_path)
+                except Exception:
+                    pass
             
             self.root.after(0, lambda: self.progress_var.set(100))
             
