@@ -317,7 +317,6 @@ def execute_pspa_gui(choice, params):
         drain_ch = int(float(params.get("drain_ch", 2)))
         gate_ch = int(float(params.get("gate_ch", 3)))
         source_ch = int(float(params.get("source_ch", 1)))
-        source_ch = int(float(params.get("source_ch", 1)))
         integration_time = str(params.get("integration_time", "MED"))
 
         with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
