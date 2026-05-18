@@ -49,6 +49,11 @@ def parse_args():
         action="store_true",
         help="Launch the CLI instead of the GUI (default is GUI)",
     )
+    parser.add_argument(
+        "--file-prefix",
+        default=None,
+        help="Optional prefix prepended to generated output filenames",
+    )
     return parser.parse_args()
 
 def gui_execute_measurement(instrument, measurement_idx, params):
@@ -82,6 +87,9 @@ def main():
     """Main entry point for the measurement automation system."""
     args = parse_args()
 
+    if args.file_prefix is not None:
+        file_management.set_filename_prefix(args.file_prefix)
+
     # --- Logging ----------------------------------------------------------
     logging_config.setup(output_dir=file_management.default_output_dir)
     log.info("Welcome to the NRG Semiconductor Measurement Automation. Developed by Ethan Ruddell (NRG, University of Florida).")
@@ -89,7 +97,7 @@ def main():
     if args.cli:
         log.info("Launching CLI mode")
         from cli import cli_main
-        cli_main(output_dir=args.output_dir)
+        cli_main(output_dir=args.output_dir, file_prefix=args.file_prefix)
     else:
         log.info("Launching GUI mode")
         import gui

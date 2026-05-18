@@ -231,6 +231,13 @@ class MeasurementGUI:
         browse_btn = ttk.Button(output_frame, text="Browse", command=self.browse_output_dir)
         browse_btn.grid(row=0, column=1, padx=(5, 0))
 
+        ttk.Label(output_frame, text="File Name Prefix (optional):").grid(
+            row=1, column=0, columnspan=2, sticky=tk.W, pady=(6, 0)
+        )
+        self.file_prefix_var = tk.StringVar(value=file_management.filename_prefix)
+        prefix_entry = ttk.Entry(output_frame, textvariable=self.file_prefix_var)
+        prefix_entry.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(2, 0))
+
         # --- Cryo Integration ---
         self.cryo_var = tk.BooleanVar(value=False)
         cryo_check = ttk.Checkbutton(self.main_frame, text="Enable Cryogenic Temperature Sweep",
@@ -882,6 +889,7 @@ class MeasurementGUI:
                 raise ValueError("Target temperature is out of range")
             
             output_dir = self.output_dir_var.get()
+            file_management.set_filename_prefix(self.file_prefix_var.get())
             file_management.set_output_dir(output_dir)
             file_management.ensure_output_dir(output_dir)
             
@@ -889,6 +897,8 @@ class MeasurementGUI:
             self.update_status(f"Ramp rate: {ramp_rate} K/min")
             self.update_status(f"Measurement interval: {meas_interval} K")
             self.update_status(f"Queued measurements: {len(self.measurement_queue)}")
+            if file_management.filename_prefix:
+                self.update_status(f"File prefix: {file_management.filename_prefix}")
             
             # Disable buttons during sweep
             self.queue_btn.config(state='disabled')
@@ -1123,6 +1133,7 @@ class MeasurementGUI:
             instrument = self.instrument_var.get()
             measurement_idx, measurement_name = self.get_selected_measurement()
             output_dir = self.output_dir_var.get()
+            file_management.set_filename_prefix(self.file_prefix_var.get())
 
             with _suppress_console_output():
                 self.route_switchbox(instrument, raise_on_error=True)
@@ -1133,6 +1144,8 @@ class MeasurementGUI:
 
             self.update_status(f"Starting measurement: {measurement_name}")
             self.update_status(f"Output directory: {output_dir}")
+            if file_management.filename_prefix:
+                self.update_status(f"File prefix: {file_management.filename_prefix}")
             
             # Run measurement in background thread
             self.run_btn.config(state='disabled')

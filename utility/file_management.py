@@ -28,6 +28,8 @@ import numpy as np
 from datetime import datetime
 from pathlib import Path
 
+import config
+
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
@@ -52,6 +54,9 @@ default_output_dir = str((_PROJECT_DIR / ".." / "output").resolve())
 # Active output directory (may be changed at runtime by the GUI or CLI)
 output_dir = default_output_dir
 
+# Optional file name prefix supplied by user/config, prepended to generated names.
+filename_prefix = ""
+
 
 def _scale_capacitance_for_display(y_label: str, y_values):
     """Convert capacitance traces from F to pF for human-readable plots.
@@ -73,6 +78,22 @@ def _scale_capacitance_for_display(y_label: str, y_values):
 def _date_prefix() -> str:
     """Return a compact date-time prefix for file naming, e.g. '2026-03-02_14-05-12'."""
     return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+
+def _sanitize_filename_prefix(prefix: str) -> str:
+    """Normalize a user-provided prefix so it is safe in file names."""
+    if prefix is None:
+        return ""
+
+    cleaned = str(prefix).strip()
+    if not cleaned:
+        return ""
+
+    # Windows-invalid file name characters.
+    for ch in '<>:"/\\|?*':
+        cleaned = cleaned.replace(ch, "_")
+
+    return cleaned.rstrip(". ")
 
 
 def uniquify(path_string: str, date_stamp: bool = True) -> str:
@@ -99,6 +120,10 @@ def uniquify(path_string: str, date_stamp: bool = True) -> str:
         stem = f"{_date_prefix()}_{stem}"
         path = directory / f"{stem}{ext}"
 
+    if filename_prefix:
+        stem = f"{filename_prefix}-{stem}"
+        path = directory / f"{stem}{ext}"
+
     counter = 1
     while path.exists():
         path = directory / f"{stem} ({counter}){ext}"
@@ -116,6 +141,12 @@ def set_output_dir(path: str) -> None:
     """Override the active output directory with an absolute, expanded path."""
     global output_dir
     output_dir = str(Path(path).expanduser().resolve())
+
+
+def set_filename_prefix(prefix: str) -> None:
+    """Set an optional prefix prepended to every generated output filename."""
+    global filename_prefix
+    filename_prefix = _sanitize_filename_prefix(prefix)
 
 # =============================
 # Save helpers
@@ -275,3 +306,7 @@ def get_latest_image() -> str:
     except Exception as e:
         log.warning("Failed to get latest image: %s", e)
         return None
+
+
+# Initialize from persistent config when available.
+set_filename_prefix(config.get("output", "filename_prefix", ""))

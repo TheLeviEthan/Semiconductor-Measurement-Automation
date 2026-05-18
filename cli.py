@@ -212,7 +212,7 @@ def run_cryo_sweep(measurement_queue):
                 pass
 
 
-def cli_main(output_dir=None):
+def cli_main(output_dir=None, file_prefix=None):
     """CLI entry point for the measurement automation system."""
     global cryo_enabled, cryo_params
 
@@ -227,8 +227,25 @@ def cli_main(output_dir=None):
     output_path = input(f"Enter output directory [default: {default_dir}]: ").strip() or default_dir
     file_management.set_output_dir(output_path)
     file_management.ensure_output_dir(file_management.output_dir)
+
+    default_prefix = file_prefix
+    if default_prefix is None:
+        default_prefix = config.get("output", "filename_prefix", "")
+    prefix_display = default_prefix if default_prefix else "none"
+    prefix_input = input(
+        f"Enter file name prefix [default: {prefix_display}] (type 'none' to clear): "
+    ).strip()
+    if prefix_input.lower() == "none":
+        file_management.set_filename_prefix("")
+    elif prefix_input:
+        file_management.set_filename_prefix(prefix_input)
+    else:
+        file_management.set_filename_prefix(default_prefix)
+
     log.info("Output directory set to: %s", file_management.output_dir)
     print(f"Output directory set to: {file_management.output_dir}\n")
+    if file_management.filename_prefix:
+        print(f"File name prefix: {file_management.filename_prefix}\n")
     
     while True:
         # Prompt user to select instrument or quit

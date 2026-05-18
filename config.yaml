@@ -42,6 +42,7 @@ lcr:
 # --- Output ---
 output:
   directory: ""              # leave empty to use default (../output)
+  filename_prefix: ""        # optional, saved files become PREFIX-<generated_name>
 
 # --- Logging ---
 logging:
