@@ -374,13 +374,16 @@ def execute_pspa_gui(choice, params):
         v_step = float(params.get("v_step", 0.1))
         compliance = float(params.get("compliance", 0.1))
         channel = int(float(params.get("channel", 1)))
+        # Ground channel may be optional in the GUI; allow empty -> None
+        ground_raw = params.get("ground_ch", "")
+        ground_ch = None if str(ground_raw).strip() == "" else int(float(ground_raw))
         integration_time = str(params.get("integration_time", "MED"))
 
         with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
             data = pspa.measure_iv_curve(
                 inst, v_start, v_stop, v_step,
                 channel=channel, compliance=compliance,
-                integration_time=integration_time)
+                ground_ch=ground_ch, integration_time=integration_time)
             file_management.save_csv("iv_curve.csv",
                 np.column_stack([data['Voltage'], data['Current']]),
                 "Voltage_V, Current_A")
@@ -397,13 +400,15 @@ def execute_pspa_gui(choice, params):
         v_step = float(params.get("v_step", 0.1))
         compliance = float(params.get("compliance", 0.1))
         channel = int(float(params.get("channel", 1)))
+        ground_raw = params.get("ground_ch", "")
+        ground_ch = None if str(ground_raw).strip() == "" else int(float(ground_raw))
         integration_time = str(params.get("integration_time", "MED"))
 
         with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
             data = pspa.measure_iv_bidirectional(
                 inst, v_max, v_step,
                 channel=channel, compliance=compliance,
-                integration_time=integration_time)
+                ground_ch=ground_ch, integration_time=integration_time)
             file_management.save_csv("iv_curve_bidirectional.csv",
                 np.column_stack([data['Voltage'], data['Current']]),
                 "Voltage_V, Current_A")

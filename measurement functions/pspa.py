@@ -210,8 +210,6 @@ def disconnect_pspa(pspa):
     try:
         # Disable all channels 
         pspa.write("CL")
-        # Return to SCPI mode (Page mode)
-        pspa.write(":PAGE")
     except Exception:
         pass
     pspa.close()
