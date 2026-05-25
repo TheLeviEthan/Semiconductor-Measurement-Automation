@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mea
 
 import pia
 import pspa
+import keithley
 import lcr
 import file_management
 from gpib_utils import InstrumentSession
@@ -564,6 +565,37 @@ def execute_pspa_gui(choice, params):
             plt.title(f"Resistance (R ≈ {data['resistance_ohm']:.4e} Ω)")
             plt.grid(True); plt.tight_layout()
             file_management.save_plot("resistance.png"); plt.close()
+
+    elif choice == 12:
+        # Keithley Sourcemeter Transistors
+        v_start = float(params.get("v_start", -1))
+        v_stop = float(params.get("v_stop", 3))
+        v_step = float(params.get("v_step", 0.05))
+        compliance = float(params.get("compliance", 0.1))
+        sweep_ch = int(float(params.get("sweep_ch", 1)))
+        settle_s = float(params.get("settle_s", 0.05))
+
+        with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
+            data = keithley.measure_voltage_sweep_current(
+                inst, keithley.DEFAULT_GPIB_ADDRESS, v_start, v_stop, v_step,
+                sweep_channel=sweep_ch, compliance=compliance, settle_s=settle_s)
+            file_management.save_csv("keithley_sourcemeter_transistors.csv",
+                np.column_stack([data['Voltage'], data['Current']]),
+                "Voltage_V, Current_A")
+
+            plt.figure(figsize=(10, 6))
+            plt.plot(data['Voltage'], data['Current'] * 1e3, marker='o')
+            plt.xlabel('Voltage (V)'); plt.ylabel('Current (mA)')
+            plt.title('Keithley Sourcemeter Transistors - Linear')
+            plt.grid(True); plt.tight_layout()
+            file_management.save_plot("keithley_sourcemeter_transistors_linear.png"); plt.close()
+
+            plt.figure(figsize=(10, 6))
+            plt.semilogy(data['Voltage'], np.abs(data['Current']), marker='o')
+            plt.xlabel('Voltage (V)'); plt.ylabel('|Current| (A)')
+            plt.title('Keithley Sourcemeter Transistors - Log')
+            plt.grid(True); plt.tight_layout()
+            file_management.save_plot("keithley_sourcemeter_transistors_log.png"); plt.close()
 
     else:
         raise ValueError(f"Unknown PSPA measurement index: {choice}")
