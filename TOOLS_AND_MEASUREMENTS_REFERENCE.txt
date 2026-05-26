@@ -1113,6 +1113,35 @@ Description:
   - More accurate for low-resistance measurements
 
 
+3.3.7 Keithley Sourcemeter Transistors
+-------------------------------------------------------------------------------
+Function: measure_voltage_sweep_current(pspa_inst, keithley_address, v_start, v_stop,
+                                        v_step, sweep_channel=1, compliance=0.1,
+                                        settle_s=0.05)
+
+Module: measurement functions/keithley.py
+
+Inputs:
+  - pspa_inst: PSPA VISA instrument instance (required)
+  - keithley_address: Keithley VISA resource string (required)
+  - v_start: Start voltage (V, required)
+  - v_stop: Stop voltage (V, required)
+  - v_step: Voltage step (V, required, non-zero)
+  - sweep_channel: PSPA SMU channel used to force the voltage sweep (integer, optional, default 1)
+  - compliance: PSPA current compliance limit (A, optional, default 0.1)
+  - settle_s: Delay after each sweep point before reading current (seconds, optional, default 0.05)
+
+Outputs (dict):
+  - 'Voltage': Array of swept voltages (V)
+  - 'Current': Array of Keithley-measured currents (A)
+
+Description:
+  - Forces voltage on a selected PSPA SMU channel
+  - Reads current from a directly connected Keithley sourcemeter on GPIB0::17::INSTR
+  - Does not require switchbox routing changes
+  - Saves CSV and linear/log plots through the GUI and CLI wrappers
+
+
 --------------------------------------------------------------------------------
 3.4 MEASUREMENTS - PULSED CHARACTERIZATION
 --------------------------------------------------------------------------------
@@ -1365,6 +1394,7 @@ log_filename:  "measurement.log"  # Log file name
   │   ├── __init__.py
   │   ├── pia.py                      # 4294A Precision Impedance Analyzer
   │   ├── pspa.py                     # 4155C/4156C Parameter Analyzer (FLEX)
+  │   ├── keithley.py                 # Keithley sourcemeter helpers and sweep readout
   │   ├── lcr.py                      # E4980A LCR Meter
   │   ├── cryo.py                     # Cryocon 32B Temperature Controller
   │   └── measurements_config.py       # Centralized measurement config
@@ -1457,7 +1487,7 @@ gui.py (~584 lines):
 gui_measurements.py (~709 lines):
   - Non-interactive measurement execution for the GUI
   - execute_pia_gui(choice, params) — 10 PIA measurements
-  - execute_pspa_gui(choice, params) — 10 PSPA measurements
+  - execute_pspa_gui(choice, params) — 12 PSPA measurements
   - execute_lcr_gui(choice, params) — 11 LCR measurements
   - Takes params dict from GUI entry fields, calls instrument modules directly
   - No input() calls — safe to call from background threads
@@ -1477,6 +1507,11 @@ pspa.py:
   - I-V curves (unidirectional and bidirectional)
   - Pulsed measurements (single device and transistor)
   - Diode I-V, gate leakage, breakdown voltage, resistance
+
+keithley.py:
+  - Keithley sourcemeter connection and cleanup
+  - Zero-volt current-readback configuration
+  - PSPA voltage sweep + Keithley current measurement
 
 lcr.py:
   - E4980A connection and initialization
@@ -1552,7 +1587,7 @@ Key Components:
 
 1. Measurement Lists
    - PIA_MEASUREMENTS: 10 measurement types for PIA (4294A)
-   - PSPA_MEASUREMENTS: 10 measurement types for PSPA (4155C/4156C)
+  - PSPA_MEASUREMENTS: 12 measurement types for PSPA (4155C/4156C)
    - LCR_MEASUREMENTS: 11 measurement types for LCR (E4980A)
 
 2. Parameter Definitions

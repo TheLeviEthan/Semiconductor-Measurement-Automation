@@ -51,6 +51,7 @@ PSPA_MEASUREMENTS = [
     "Gate Leakage Current",
     "Breakdown Voltage",
     "Resistance Measurement",
+    "Keithley Sourcemeter Transistors",
 ]
 
 # The PSPA menu order shown to users differs from historical execution
@@ -119,6 +120,7 @@ MEASUREMENT_HELP = {
     ("PSPA", 9): "Measures gate leakage current to see how much current flows through the gate stack.",
     ("PSPA", 10): "Sweeps voltage until the current reaches the breakdown threshold.",
     ("PSPA", 11): "Measures resistance by forcing current and reading the resulting voltage drop.",
+    ("PSPA", 12): "Sweeps a PSPA voltage channel while reading current from a Keithley sourcemeter on direct probes.",
     ("LCR", 1): "Measures impedance magnitude and phase versus frequency with the LCR meter.",
     ("LCR", 2): "Measures capacitance and dissipation factor versus frequency with the LCR meter.",
     ("LCR", 3): "Measures inductance and quality factor versus frequency with the LCR meter.",
@@ -164,6 +166,8 @@ PARAM_HELP_OVERRIDES = {
     "anode_ch": "Instrument channel assigned to the diode anode.",
     "cathode_ch": "Instrument channel assigned to the diode cathode.",
     "sense_channel": "Sense channel used for the measurement. In 2-wire mode this is usually the same as the force channel.",
+    "sweep_ch": "PSPA channel used to force the voltage sweep.",
+    "settle_s": "Delay after each voltage step to allow the current reading to settle.",
     "mode": "Selects the measurement function or mode used by the instrument.",
     "integration_time": "Sets the measurement aperture. Longer times are slower but usually less noisy.",
     "threshold_a": "Current threshold used to identify breakdown.",
@@ -359,6 +363,12 @@ MEASUREMENT_PARAMS = {
                     ("Drain SMU Channel", "drain_ch", "2"),
                     ("Gate SMU Channel", "gate_ch", "3"),
                     ("Source SMU Channel", "source_ch", "1")],
+    ("PSPA", 12): [("Start Voltage (V)", "v_start", "-1"),
+                    ("Stop Voltage (V)", "v_stop", "3"),
+                    ("Voltage Step (V)", "v_step", "0.05"),
+                    ("Current Compliance (A)", "compliance", "0.1"),
+                    ("PSPA Sweep Channel", "sweep_ch", "1"),
+                    ("Settle Time (s)", "settle_s", "0.05")],
     
     # LCR Measurements
     ("LCR", 1): [("Start Frequency (Hz)", "freq_start", "20"),

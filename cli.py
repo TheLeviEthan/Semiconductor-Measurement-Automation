@@ -46,6 +46,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mea
 # Import modules
 import pia
 import pspa
+import keithley
 import lcr
 import cryo
 import file_management
@@ -2076,6 +2077,55 @@ def execute_pspa_measurement(choice):
                     print("Measurement complete. Data saved to output folder.")
             except Exception as e:
                 log.error("PSPA resistance failed: %s", e)
+                print(f"Error during measurement: {e}")
+
+        elif choice == 12:
+            # Keithley Sourcemeter Transistors
+            print("PSPA: Keithley Sourcemeter Transistors")
+
+            v_start = safe_float_input("Enter start voltage (V) [default -1]: ", -1)
+            v_stop = safe_float_input("Enter stop voltage (V) [default 3]: ", 3)
+            v_step = safe_float_input("Enter voltage step (V) [default 0.05]: ", 0.05)
+            compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
+            sweep_ch = safe_int_input("Enter PSPA sweep channel [default 1]: ", 1)
+            settle_s = safe_float_input("Enter settle time per step (s) [default 0.05]: ", 0.05)
+
+            try:
+                with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
+                    print("\nRunning Keithley sourcemeter sweep...")
+                    data = keithley.measure_voltage_sweep_current(
+                        pspa_inst, keithley.DEFAULT_GPIB_ADDRESS, v_start, v_stop, v_step,
+                        sweep_channel=sweep_ch, compliance=compliance, settle_s=settle_s
+                    )
+
+                    csv_data = np.column_stack([data['Voltage'], data['Current']])
+                    file_management.save_csv(
+                        "keithley_sourcemeter_transistors.csv", csv_data, "Voltage_V, Current_A"
+                    )
+
+                    plt.figure(figsize=(10, 6))
+                    plt.plot(data['Voltage'], data['Current'] * 1e3, marker='o')
+                    plt.xlabel('Voltage (V)')
+                    plt.ylabel('Current (mA)')
+                    plt.title('Keithley Sourcemeter Transistors - Linear')
+                    plt.grid(True)
+                    plt.tight_layout()
+                    file_management.save_plot("keithley_sourcemeter_transistors_linear.png")
+                    plt.close()
+
+                    plt.figure(figsize=(10, 6))
+                    plt.semilogy(data['Voltage'], np.abs(data['Current']), marker='o')
+                    plt.xlabel('Voltage (V)')
+                    plt.ylabel('|Current| (A)')
+                    plt.title('Keithley Sourcemeter Transistors - Log')
+                    plt.grid(True)
+                    plt.tight_layout()
+                    file_management.save_plot("keithley_sourcemeter_transistors_log.png")
+                    plt.close()
+
+                    print("Measurement complete. Data saved to output folder.")
+            except Exception as e:
+                log.error("PSPA Keithley sourcemeter sweep failed: %s", e)
                 print(f"Error during measurement: {e}")
 
         repeat_input = input("\nDo you want to perform another measurement? (y/n): ").strip().lower()
