@@ -17,6 +17,7 @@ CRITICAL SEQUENCE RULES:
                  Reverse of enable to avoid floating junctions
 """
 
+import atexit
 import logging
 import time
 
@@ -29,6 +30,9 @@ log = logging.getLogger(__name__)
 
 DEFAULT_KEITHLEY_ADDRESS = "GPIB0::17::INSTR"
 DEFAULT_4156C_ADDRESS = "GPIB0::16::INSTR"
+# Backward-compatible alias used by the GUI/CLI call sites.
+DEFAULT_GPIB_ADDRESS = DEFAULT_KEITHLEY_ADDRESS
+_OPEN_KEITHLEY_SESSIONS = set()
 
 # =====================================================================
 # CONNECTION FUNCTIONS
@@ -57,7 +61,39 @@ def connect_keithley_2400(resource_name=None):
     print(f"Connecting to Keithley 2400 at: {target}")
     keithley = rm.open_resource(target)
     keithley.timeout = pspa.DEFAULT_TIMEOUT_MS
+    _OPEN_KEITHLEY_SESSIONS.add(keithley)
     return keithley
+
+
+def connect_keithley_sourcemeter(resource_name=None):
+    """Backward-compatible alias for the Keithley 2400 connection helper."""
+    return connect_keithley_2400(resource_name)
+
+
+def disconnect_keithley_sourcemeter(keithley):
+    """Backward-compatible alias for the Keithley 2400 disconnect helper."""
+    return disconnect_instrument(keithley, "Keithley 2400")
+
+
+def configure_voltage_sweep_source(keithley, compliance=0.1):
+    """Configure the Keithley 2400 to source voltage for a gate sweep."""
+    # Match the known-good command sequence from LEGACY/Need ReRAM Mark 4.py.
+    keithley.write("*RST")
+    keithley.write("*CLS")
+    keithley.write("ROUT:TERM REAR")
+    keithley.write("SOUR:FUNC VOLT")
+    keithley.write("SOUR:VOLT:MODE FIXED")
+    keithley.write("SENS:FUNC 'CURR:DC'")
+    keithley.write("SENS:CURR:RANG:AUTO ON")
+    keithley.write("FORM:ELEM CURR")
+    keithley.write(f"SOUR:VOLT:ILIM {compliance}")
+    keithley.write("SOUR:VOLT 0")
+    keithley.write("OUTP ON")
+
+
+def configure_current_readback(keithley, source_voltage=0.0, compliance=0.1):
+    """Compatibility wrapper for the older Keithley current readback setup."""
+    configure_voltage_sweep_source(keithley, compliance=compliance)
 
 
 def disconnect_instrument(inst, name="Instrument"):
@@ -83,6 +119,20 @@ def disconnect_instrument(inst, name="Instrument"):
         inst.close()
     except Exception as e:
         log.warning(f"Error closing {name} session: {e}")
+    finally:
+        _OPEN_KEITHLEY_SESSIONS.discard(inst)
+
+
+def _close_open_keithley_sessions():
+    """Best-effort cleanup so Keithley sessions are closed on process exit."""
+    for inst in list(_OPEN_KEITHLEY_SESSIONS):
+        try:
+            disconnect_instrument(inst, "Keithley 2400")
+        except Exception:
+            pass
+
+
+atexit.register(_close_open_keithley_sessions)
 
 
 # =====================================================================
@@ -122,18 +172,17 @@ def initialize_keithley_2400(inst_keithley, vg_start=0.0, i_compliance=0.1):
     
     # Reset to known state
     inst_keithley.write("*RST")
-    inst_keithley.write("*CLS")
+    #inst_keithley.write("*CLS")
     
     # Configure for voltage source, current measurement
     print(f"  Configuring gate sweep: start {vg_start}V, compliance {i_compliance} A")
+    inst_keithley.write(":ROUT:TERM REAR")
     inst_keithley.write(":SOUR:FUNC VOLT")
-    # The 2400 does not use a :SOUR:VOLT:MODE FIXED subtree; voltage source mode
-    # is established by :SOUR:FUNC VOLT and setting the source level directly.
-    inst_keithley.write(":SENS:FUNC 'CURR'")
+    inst_keithley.write(":SOUR:VOLT:MODE FIXED")
+    inst_keithley.write(":SENS:FUNC 'CURR:DC'")
     inst_keithley.write(":SENS:CURR:RANG:AUTO ON")
     inst_keithley.write(":FORM:ELEM CURR")
-    # Current compliance is set with the sense protection level on the 2400.
-    inst_keithley.write(f":SENS:CURR:PROT {i_compliance}")
+    inst_keithley.write(f":SOUR:VOLT:ILIM {i_compliance}")
     inst_keithley.write(f":SOUR:VOLT {vg_start}")
     # DO NOT enable output yet (no :OUTP ON) - wait for enable sequence
     
@@ -254,6 +303,109 @@ def measure_transistor_id(inst_4156c):
     return pspa.measure_channel_current(inst_4156c, 1)
 
 
+def measure_voltage_sweep_current(pspa_inst, keithley_address, vgs_start, vgs_stop,
+                                  vgs_step, vds_constant, drain_channel=1,
+                                  source_channel=2, compliance=0.1, settle_s=0.05,
+                                  integration_time="MED"):
+    """
+    Sweep Vgs with the Keithley while PSPA holds constant Vds and measures Id.
+
+    This preserves the GUI/CLI API used by the merged measurement flow.
+    """
+    drain_channel = pspa.validate_channel(drain_channel)
+    source_channel = pspa.validate_channel(source_channel)
+    pspa.validate_compliance(compliance)
+    pspa.validate_step(vgs_step)
+
+    vgs_forward = pspa.sweep_values(vgs_start, vgs_stop, vgs_step)
+    vgs_reverse = pspa.sweep_values(vgs_stop, vgs_start, -vgs_step)
+    vgs_array = []
+    id_array = []
+    direction_array = []
+    keithley = None
+
+    try:
+        # Mirror the normal PSPA transfer setup exactly for drain/source biasing.
+        drain_channel, _, source_channel = pspa.configure_transfer_bias(
+            pspa_inst,
+            drain_channel,
+            source_channel,
+            vds_constant,
+            compliance=compliance,
+            integration_time=integration_time,
+        )
+        try:
+            drain_readback = pspa.measure_channel_voltage(pspa_inst, drain_channel)
+            source_readback = pspa.measure_channel_voltage(pspa_inst, source_channel)
+            print(f"PSPA commanded: drain CH{drain_channel} = {vds_constant} V")
+            print(f"PSPA readback drain CH{drain_channel}: {drain_readback}")
+            print(f"PSPA readback source CH{source_channel}: {source_readback}")
+            print(f"PSPA errors: {pspa.check_errors(pspa_inst)}")
+            log.info(
+                "PSPA readback before sweep: drain CH%s=%.6f V, source CH%s=%.6f V",
+                drain_channel,
+                drain_readback,
+                source_channel,
+                source_readback,
+            )
+        except Exception as exc:
+            print(f"PSPA readback failed before sweep: {exc}")
+            log.warning("PSPA voltage readback failed before sweep: %s", exc)
+
+        # Match the legacy Keithley sweep flow exactly.
+        keithley = connect_keithley_sourcemeter(keithley_address)
+        configure_voltage_sweep_source(keithley, compliance=compliance)
+        keithley.write(f"SOUR:VOLT:RANG {max(abs(vgs_start), abs(vgs_stop))}")
+        keithley.write("OUTP ON")
+
+        def _run_sweep(values, direction):
+            for vgs in values:
+                keithley.write(f"SOUR:VOLT {vgs}")
+                time.sleep(settle_s)
+                # Legacy pattern triggers Keithley READ? at each point.
+                try:
+                    keithley.query("READ?")
+                except Exception:
+                    pass
+                #pspa.set_voltage(pspa_inst, drain_channel, vds_constant);
+                current_value = pspa.measure_channel_current(pspa_inst, drain_channel)
+                vgs_array.append(vgs)
+                id_array.append(current_value)
+                direction_array.append(direction)
+
+        _run_sweep(vgs_forward, "forward")
+        _run_sweep(vgs_reverse, "reverse")
+
+    finally:
+        try:
+            if keithley is not None:
+                keithley.write("OUTP OFF")
+        except Exception:
+            pass
+        if keithley is not None:
+            disconnect_keithley_sourcemeter(keithley)
+        try:
+            pspa.set_voltage(pspa_inst, drain_channel, 0)
+            pspa.set_voltage(pspa_inst, source_channel, 0)
+            pspa_inst.write("CL")
+        except Exception:
+            pass
+
+    vgs_np = np.array(vgs_array)
+    id_np = np.array(id_array)
+    dir_np = np.array(direction_array)
+
+    if id_np.size > 0 and np.nanmedian(id_np) < 0:
+        id_np = -id_np
+        log.info("Keithley current polarity normalized to positive convention")
+
+    return {
+        'Vgs': vgs_np,
+        'Id': id_np,
+        'Sweep_Direction': dir_np,
+    }
+
+
 # =====================================================================
 # SHUTDOWN SEQUENCE (REVERSE OF ENABLE - CRITICAL ORDER)
 # =====================================================================
@@ -337,7 +489,7 @@ def measure_transistor_vg_sweep(
     vg_stop=5.0,
     vg_step=0.1,
     i_compliance=0.1,
-    vds_settle_s=1.0,
+    vds_settle_s=0.05,
     vg_settle_s=0.05
 ):
     """

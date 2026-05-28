@@ -52,7 +52,165 @@ import cryo
 import file_management
 import config
 import logging_config
-from gpib_utils import InstrumentSession, safe_float_input, safe_int_input, prompt_choice, prompt_bool
+from gpib_utils import (
+    InstrumentSession, prompt_choice, prompt_bool,
+    safe_float_input, safe_int_input,
+)
+from measurements_config import (
+    PIA_MEASUREMENTS, PSPA_MEASUREMENTS, LCR_MEASUREMENTS,
+    get_measurement_name, get_measurements_list, normalize_pspa_choice,
+)
+
+log = logging.getLogger(__name__)
+
+# =============================
+# Global Cryo Parameters
+# =============================
+# These module-level variables track whether cryogenic mode is active.
+# When the user selects "CRYO" from the main menu, cryo_enabled is set
+# to True and cryo_params is filled with temperature range and ramp rate.
+cryo_enabled = False
+cryo_params = None  # Will hold temperature sweep parameters
+
+# =============================
+# Measurement aliases for convenience
+# =============================
+# Re-export the measurement name lists from measurements_config so they
+# can be referenced more concisely throughout this file.
+pia_measurements = PIA_MEASUREMENTS
+pspa_measurements = PSPA_MEASUREMENTS
+lcr_measurements = LCR_MEASUREMENTS
+
+
+
+def run_cryo_sweep(measurement_queue):
+    """
+    Execute multiple measurements at each temperature point in a cryo sweep.
+
+    The temperature ramp is paused (held) while measurements are running at
+    each point, then resumed to move to the next setpoint.
+
+    Data for each temperature point is saved into a subdirectory named by
+    temperature (e.g. ``output/cryo_sweep/100.0K/``).
+
+    Args:
+        measurement_queue: list of (name, callable) tuples returned by
+                           ``_prepare_*_cryo()`` functions.
+    """
+    global cryo_params
+
+    if not cryo_enabled or cryo_params is None:
+        print("Error: Cryogenic parameters are not configured.")
+        return
+    if not measurement_queue:
+        print("Error: No measurements queued.")
+        return
+
+    ramp_rate = cryo_params['ramp_rate_k_per_min']
+    meas_interval = cryo_params['meas_interval_k']
+    end_temp = cryo_params['end_k']
+    n_meas = len(measurement_queue)
+    base_output_dir = file_management.output_dir  # remember for restore
+
+    print(f"\n{'='*60}")
+    print("STARTING CRYOGENIC MEASUREMENT SWEEP")
+    print(f"{'='*60}")
+    print("Temperature sweep : current temperature -> target")
+    print(f"Target temperature: {end_temp:.1f}K")
+    print(f"Ramp rate         : {ramp_rate:.2f} K/min")
+    print(f"Measurement step  : {meas_interval:.2f} K")
+    print(f"Measurements/point: {n_meas}")
+    for idx, (mname, _) in enumerate(measurement_queue, 1):
+        print(f"  {idx}. {mname}")
+    print()
+
+    cryocon = None
+    try:
+        # Connect to Cryocon 32B
+        cryocon = cryo.setup()
+
+        start_temp = cryo.get_current_temperature(cryocon, loop=2)
+        if start_temp is None:
+            raise RuntimeError("Unable to read current temperature from controller")
+        if start_temp < end_temp - cryo.TEMP_TOLERANCE_K:
+            raise RuntimeError(
+                f"Current temperature ({start_temp:.2f} K) is below target ({end_temp:.2f} K). "
+                "Cryo sweep only supports ramping down."
+            )
+
+        temp_points = cryo.generate_temperature_sweep_points(start_temp, end_temp, meas_interval)
+        n_temps = len(temp_points)
+
+        print(f"Temperature sweep : {temp_points[0]:.1f}K -> {temp_points[-1]:.1f}K")
+        print(f"Temperature points: {n_temps}")
+
+        for temp_idx, target_temp in enumerate(temp_points):
+            print(f"\n{'─'*60}")
+            print(f"Temperature point {temp_idx + 1}/{n_temps}: {target_temp:.2f} K")
+            print(f"{'─'*60}")
+
+            # Ramp to target temperature
+            cryo.resume_ramp_to_next(cryocon, target_temp, ramp_rate, loop=2)
+
+            # Wait for temperature to stabilise
+            success = cryo.wait_for_temperature(
+                cryocon, target_temp,
+                tolerance_k=cryo.TEMP_TOLERANCE_K,
+                stability_time_s=cryo.TEMP_STABILITY_TIME_S,
+                loop=2)
+
+            if not success:
+                log.warning("Temperature stabilisation failed at point %d", temp_idx + 1)
+                print(f"Warning: stabilisation failed at {target_temp:.2f} K – continuing anyway…")
+
+            # HOLD temperature — pause ramp while measurements run
+            cryo.hold_temperature(cryocon, loop=2)
+
+            current_temp = cryo.get_current_temperature(cryocon, loop=2)
+            if current_temp is not None:
+                print(f"  Confirmed temperature: {current_temp:.2f} K")
+
+            # Direct output into a temperature-specific subdirectory
+            temp_subdir = os.path.join(base_output_dir, "cryo_sweep", f"{target_temp:.1f}K")
+            file_management.set_output_dir(temp_subdir)
+            file_management.ensure_output_dir(temp_subdir)
+
+            # Execute every queued measurement at this temperature
+            for m_idx, (mname, executor) in enumerate(measurement_queue, 1):
+                print(f"\n  [{m_idx}/{n_meas}] {mname}")
+                try:
+                    executor()
+                    print(f"  [{m_idx}/{n_meas}] Complete")
+                except Exception as exc:
+                    log.error("Measurement '%s' failed at %.1f K: %s", mname, target_temp, exc)
+                    print(f"  [{m_idx}/{n_meas}] FAILED: {exc}")
+
+            print(f"\nAll measurements done at {target_temp:.2f} K")
+
+        # Finished sweep
+        cryo.disable_ramp(cryocon, loop=2)
+        cryo.disconnect_cryocon(cryocon)
+        cryocon = None
+
+        log.info("Cryogenic sweep complete – %d temps × %d measurements", n_temps, n_meas)
+        print(f"\n{'='*60}")
+        print("CRYOGENIC SWEEP COMPLETE")
+        print(f"{'='*60}")
+        print(f"Data saved under: {os.path.join(base_output_dir, 'cryo_sweep')}")
+
+    except Exception as e:
+        log.error("Cryogenic sweep error: %s", e)
+        print(f"\nCritical error during sweep: {e}")
+        raise
+    finally:
+        # Always restore the original output directory
+        file_management.set_output_dir(base_output_dir)
+        if cryocon is not None:
+            try:
+                cryo.disable_ramp(cryocon, loop=2)
+                cryo.disconnect_cryocon(cryocon)
+            except Exception:
+                pass
 
 
 def cli_main(output_dir=None, file_prefix=None):
@@ -87,69 +245,99 @@ def cli_main(output_dir=None, file_prefix=None):
 
     log.info("Output directory set to: %s", file_management.output_dir)
     print(f"Output directory set to: {file_management.output_dir}\n")
-        elif choice == 2:
-            # PSPA Transistor Transfer Characteristics (Linear/Log/Both)
-            print("PSPA: Transistor Transfer Characteristics (Id-Vgs curve)")
+    if file_management.filename_prefix:
+        print(f"File name prefix: {file_management.filename_prefix}\n")
+    
+    while True:
+        # Prompt user to select instrument or quit
+        print("="*60)
+        print("SELECT INSTRUMENT")
+        print("="*60)
+        print("0. CRYO - Cryogenic Temperature Controller")
+        print("1. PIA (Precision Impedance Analyzer)")
+        print("2. PSPA (Parameter/Source Analyzer)")
+        print("3. LCR (E4980A LCR Meter)")
+        print("q. Quit")
+        
+        instrument_choice = input("\nEnter your choice (0, 1, 2, 3, or q): ").strip().lower()
+        
+        if instrument_choice == 'q':
+            log.info("User exited program")
+            print("Exiting the program. Goodbye!")
+            break
+        elif instrument_choice == '0':
+            # ── Cryogenic temperature-controlled measurements ──
+            cryo_params = cryo.get_cryogenic_parameters()
+            cryo_enabled = True
+            log.info("Cryogenic measurements enabled")
 
-            vgs_start = safe_float_input("Enter start Vgs (V) [default -1]: ", -1)
-            vgs_stop = safe_float_input("Enter stop Vgs (V) [default 3]: ", 3)
-            vgs_step = safe_float_input("Enter Vgs step (V) [default 0.05]: ", 0.05)
-            vds_constant = safe_float_input("Enter constant Vds (V) [default 5]: ", 5)
-            compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
-            integration_time = prompt_choice("Enter integration time SHOR/MED/LONG [default MED]: ", "MED", valid_options=["SHOR", "MED", "LONG"])
+            # Build measurement queue
+            measurement_queue = []   # list of (name, callable)
 
-            drain_ch = safe_int_input("Enter drain SMU channel [default 2]: ", 2)
-            gate_ch = safe_int_input("Enter gate SMU channel [default 3]: ", 3)
-            source_ch = safe_int_input("Enter source SMU channel [default 1]: ", 1)
-            plot_scale = prompt_choice("Measurement scale (Linear/Log/Both) [default Both]: ", "Both", valid_options=["Linear", "Log", "Both"]) 
+            _TOOL_MENU = {
+                '1': ("PIA", pia_measurements, _prepare_pia_cryo),
+                '2': ("PSPA", pspa_measurements, _prepare_pspa_cryo),
+                '3': ("LCR", lcr_measurements, _prepare_lcr_cryo),
+            }
 
-            try:
-                with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
-                    print("\nRunning transistor transfer characteristics sweep...")
-                    data = pspa.measure_transistor_transfer_characteristics(
-                        pspa_inst, vgs_start, vgs_stop, vgs_step, vds_constant,
-                        drain_ch, gate_ch, source_ch, compliance, integration_time=integration_time
-                    )
+            while True:
+                print(f"\n{'='*60}")
+                print("CRYO SWEEP – QUEUE MEASUREMENTS")
+                print(f"{'='*60}")
+                if measurement_queue:
+                    print("Current queue:")
+                    for qi, (qn, _) in enumerate(measurement_queue, 1):
+                        print(f"  {qi}. {qn}")
+                else:
+                    print("Current queue: (empty)")
+                print()
+                print("1. Add PIA measurement(s)")
+                print("2. Add PSPA measurement(s)")
+                print("3. Add LCR measurement(s)")
+                print("v. View / edit queue")
+                print("s. Start sweep")
+                print("b. Cancel and return to main menu")
 
-                    dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
-                    csv_data = np.column_stack([data['Vgs'], data['Id'], dir_numeric])
-                    file_management.save_csv("transistor_transfer_chars.csv", csv_data, "Vgs_V, Id_A, Sweep_Dir_0fwd_1rev")
+                qchoice = input("\nEnter choice: ").strip().lower()
 
-                    fwd = data['Sweep_Direction'] == 'forward'
-                    rev = data['Sweep_Direction'] == 'reverse'
+                if qchoice == 'b':
+                    cryo_enabled = False
+                    cryo_params = None
+                    measurement_queue.clear()
+                    break
 
-                    # Linear plot
-                    if plot_scale.lower() in ["linear", "both"]:
-                        plt.figure(figsize=(10, 6))
-                        plt.plot(data['Vgs'][fwd], data['Id'][fwd] * 1e3, marker='o', label='Id (fwd)')
-                        plt.plot(data['Vgs'][rev], data['Id'][rev] * 1e3, marker='s', label='Id (rev)')
-                        plt.xlabel('Vgs (V)')
-                        plt.ylabel('Id (mA)')
-                        plt.title(f'Transfer Characteristics (Vds = {vds_constant} V) - Linear')
-                        plt.grid(True)
-                        plt.legend()
-                        plt.tight_layout()
-                        file_management.save_plot("transistor_transfer_chars_linear.png")
-                        plt.close()
+                elif qchoice == 's':
+                    if not measurement_queue:
+                        print("Queue is empty – add at least one measurement first.")
+                        continue
+                      # Confirm and start
+                    print("\nReady to sweep from current temperature down to "
+                        f"{cryo_params['end_k']:.1f}K in {cryo_params['meas_interval_k']:.1f}K steps "
+                        f"at {cryo_params['ramp_rate_k_per_min']:.2f} K/min.")
+                    go = input("Press Enter to start (or 'b' to go back): ").strip().lower()
+                    if go == 'b':
+                        continue
+                    run_cryo_sweep(measurement_queue)
+                    # After sweep, reset cryo state
+                    cryo_enabled = False
+                    cryo_params = None
+                    measurement_queue.clear()
+                    break
 
-                    # Log plot
-                    if plot_scale.lower() in ["log", "both"]:
-                        plt.figure(figsize=(10, 6))
-                        plt.semilogy(data['Vgs'][fwd], np.abs(data['Id'][fwd]), marker='o', label='|Id| (fwd)')
-                        plt.semilogy(data['Vgs'][rev], np.abs(data['Id'][rev]), marker='s', label='|Id| (rev)')
-                        plt.xlabel('Vgs (V)')
-                        plt.ylabel('Current (A)')
-                        plt.title(f'Transfer Characteristics (Vds = {vds_constant} V) - Log')
-                        plt.grid(True)
-                        plt.legend()
-                        plt.tight_layout()
-                        file_management.save_plot("transistor_transfer_chars_log.png")
-                        plt.close()
-
-                    print("Measurement complete. Data saved to output folder.")
-            except Exception as e:
-                log.error("PSPA transfer chars failed: %s", e)
-                print(f"Error during measurement: {e}")
+                elif qchoice == 'v':
+                    if not measurement_queue:
+                        print("Queue is empty.")
+                        continue
+                    print("\nCurrent queue:")
+                    for qi, (qn, _) in enumerate(measurement_queue, 1):
+                        print(f"  {qi}. {qn}")
+                    edit = input("\nEnter number to remove, 'c' to clear all, or 'b' to go back: ").strip().lower()
+                    if edit == 'c':
+                        measurement_queue.clear()
+                        print("Queue cleared.")
+                    elif edit == 'b':
+                        pass
+                    else:
                         try:
                             rm_idx = int(edit) - 1
                             if 0 <= rm_idx < len(measurement_queue):
@@ -555,6 +743,7 @@ def _prepare_pspa_cryo(choice):
         return name, run
 
     elif choice == 2:
+        # Transistor Transfer Characteristics (Linear)
         vgs_start = safe_float_input("Enter start Vgs (V) [default -1]: ", -1)
         vgs_stop = safe_float_input("Enter stop Vgs (V) [default 3]: ", 3)
         vgs_step = safe_float_input("Enter Vgs step (V) [default 0.05]: ", 0.05)
@@ -564,7 +753,6 @@ def _prepare_pspa_cryo(choice):
         drain_ch = safe_int_input("Enter drain SMU channel [default 2]: ", 2)
         gate_ch = safe_int_input("Enter gate SMU channel [default 3]: ", 3)
         source_ch = safe_int_input("Enter source SMU channel [default 1]: ", 1)
-        plot_scale = prompt_choice("Measurement scale (Linear/Log/Both) [default Both]: ", "Both", valid_options=["Linear", "Log", "Both"]) 
 
         def run():
             with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
@@ -578,26 +766,45 @@ def _prepare_pspa_cryo(choice):
                     "Vgs_V, Id_A, Sweep_Dir_0fwd_1rev")
                 fwd = data['Sweep_Direction'] == 'forward'
                 rev = data['Sweep_Direction'] == 'reverse'
+                plt.figure(figsize=(10, 6))
+                plt.plot(data['Vgs'][fwd], data['Id'][fwd] * 1e3, marker='o', label='Id (fwd)')
+                plt.plot(data['Vgs'][rev], data['Id'][rev] * 1e3, marker='s', label='Id (rev)')
+                plt.xlabel('Vgs (V)'); plt.ylabel('Id (mA)')
+                plt.title(f'Transfer Chars (Vds = {vds_constant} V) - Linear')
+                plt.grid(True); plt.legend(); plt.tight_layout()
+                file_management.save_plot("transistor_transfer_chars_linear.png"); plt.close()
+        return name, run
 
-                # Linear plot
-                if plot_scale.lower() in ["linear", "both"]:
-                    plt.figure(figsize=(10, 6))
-                    plt.plot(data['Vgs'][fwd], data['Id'][fwd] * 1e3, marker='o', label='Id (fwd)')
-                    plt.plot(data['Vgs'][rev], data['Id'][rev] * 1e3, marker='s', label='Id (rev)')
-                    plt.xlabel('Vgs (V)'); plt.ylabel('Id (mA)')
-                    plt.title(f'Transfer Chars (Vds = {vds_constant} V) - Linear')
-                    plt.grid(True); plt.legend(); plt.tight_layout()
-                    file_management.save_plot("transistor_transfer_chars_linear.png"); plt.close()
+    elif choice == 11:
+        # Transistor Transfer Characteristics (Log)
+        vgs_start = safe_float_input("Enter start Vgs (V) [default -1]: ", -1)
+        vgs_stop = safe_float_input("Enter stop Vgs (V) [default 3]: ", 3)
+        vgs_step = safe_float_input("Enter Vgs step (V) [default 0.05]: ", 0.05)
+        vds_constant = safe_float_input("Enter constant Vds (V) [default 5]: ", 5)
+        compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
+        integration_time = prompt_choice("Enter integration time SHOR/MED/LONG [default MED]: ", "MED", valid_options=["SHOR", "MED", "LONG"])
+        drain_ch = safe_int_input("Enter drain SMU channel [default 2]: ", 2)
+        gate_ch = safe_int_input("Enter gate SMU channel [default 3]: ", 3)
+        source_ch = safe_int_input("Enter source SMU channel [default 1]: ", 1)
 
-                # Log plot
-                if plot_scale.lower() in ["log", "both"]:
-                    plt.figure(figsize=(10, 6))
-                    plt.semilogy(data['Vgs'][fwd], np.abs(data['Id'][fwd]), marker='o', label='|Id| (fwd)')
-                    plt.semilogy(data['Vgs'][rev], np.abs(data['Id'][rev]), marker='s', label='|Id| (rev)')
-                    plt.xlabel('Vgs (V)'); plt.ylabel('Current (A)')
-                    plt.title(f'Transfer Chars (Vds = {vds_constant} V) - Log')
-                    plt.grid(True); plt.legend(); plt.tight_layout()
-                    file_management.save_plot("transistor_transfer_chars_log.png"); plt.close()
+        def run():
+            with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
+                data = pspa.measure_transistor_transfer_characteristics(
+                    inst, vgs_start, vgs_stop, vgs_step, vds_constant,
+                    drain_ch, gate_ch, source_ch, compliance, integration_time=integration_time)
+                dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
+                file_management.save_csv("transistor_transfer_chars.csv",
+                    np.column_stack([data['Vgs'], data['Id'], dir_numeric]),
+                    "Vgs_V, Id_A, Sweep_Dir_0fwd_1rev")
+                fwd = data['Sweep_Direction'] == 'forward'
+                rev = data['Sweep_Direction'] == 'reverse'
+                plt.figure(figsize=(10, 6))
+                plt.semilogy(data['Vgs'][fwd], np.abs(data['Id'][fwd]), marker='o', label='|Id| (fwd)')
+                plt.semilogy(data['Vgs'][rev], np.abs(data['Id'][rev]), marker='s', label='|Id| (rev)')
+                plt.xlabel('Vgs (V)'); plt.ylabel('Current (A)')
+                plt.title(f'Transfer Chars (Vds = {vds_constant} V) - Log')
+                plt.grid(True); plt.legend(); plt.tight_layout()
+                file_management.save_plot("transistor_transfer_chars_log.png"); plt.close()
         return name, run
 
     elif choice == 3:
@@ -1503,7 +1710,52 @@ def execute_pspa_measurement(choice):
                 log.error("PSPA transfer chars failed: %s", e)
                 print(f"Error during measurement: {e}")
 
-        
+        elif choice == 11:
+            # PSPA Transistor Transfer Characteristics (Log)
+            print("PSPA: Transistor Transfer Characteristics (Id-Vgs curve, Log)")
+
+            vgs_start = safe_float_input("Enter start Vgs (V) [default -1]: ", -1)
+            vgs_stop = safe_float_input("Enter stop Vgs (V) [default 3]: ", 3)
+            vgs_step = safe_float_input("Enter Vgs step (V) [default 0.05]: ", 0.05)
+            vds_constant = safe_float_input("Enter constant Vds (V) [default 5]: ", 5)
+            compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
+            integration_time = prompt_choice("Enter integration time SHOR/MED/LONG [default MED]: ", "MED", valid_options=["SHOR", "MED", "LONG"])
+
+            drain_ch = safe_int_input("Enter drain SMU channel [default 2]: ", 2)
+            gate_ch = safe_int_input("Enter gate SMU channel [default 3]: ", 3)
+            source_ch = safe_int_input("Enter source SMU channel [default 1]: ", 1)
+
+            try:
+                with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
+                    print("\nRunning transistor transfer characteristics sweep...")
+                    data = pspa.measure_transistor_transfer_characteristics(
+                        pspa_inst, vgs_start, vgs_stop, vgs_step, vds_constant,
+                        drain_ch, gate_ch, source_ch, compliance, integration_time=integration_time
+                    )
+
+                    dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
+                    csv_data = np.column_stack([data['Vgs'], data['Id'], dir_numeric])
+                    file_management.save_csv("transistor_transfer_chars.csv", csv_data, "Vgs_V, Id_A, Sweep_Dir_0fwd_1rev")
+
+                    fwd = data['Sweep_Direction'] == 'forward'
+                    rev = data['Sweep_Direction'] == 'reverse'
+
+                    plt.figure(figsize=(10, 6))
+                    plt.semilogy(data['Vgs'][fwd], np.abs(data['Id'][fwd]), marker='o', label='|Id| (fwd)')
+                    plt.semilogy(data['Vgs'][rev], np.abs(data['Id'][rev]), marker='s', label='|Id| (rev)')
+                    plt.xlabel('Vgs (V)')
+                    plt.ylabel('Current (A)')
+                    plt.title(f'Transfer Characteristics (Vds = {vds_constant} V) - Log')
+                    plt.grid(True)
+                    plt.legend()
+                    plt.tight_layout()
+                    file_management.save_plot("transistor_transfer_chars_log.png")
+                    plt.close()
+
+                    print("Measurement complete. Data saved to output folder.")
+            except Exception as e:
+                log.error("PSPA transfer chars failed: %s", e)
+                print(f"Error during measurement: {e}")
 
         elif choice == 3:
             # PSPA I-V Curve (Unidirectional)
@@ -1827,53 +2079,136 @@ def execute_pspa_measurement(choice):
                 log.error("PSPA resistance failed: %s", e)
                 print(f"Error during measurement: {e}")
 
-        elif choice == 12:
-            # Keithley Sourcemeter Transistors
+        elif choice in (12, 13):
+            # Keithley Sourcemeter Transistors (Log / Linear)
             print("PSPA: Keithley Sourcemeter Transistors")
 
-            v_start = safe_float_input("Enter start voltage (V) [default -1]: ", -1)
-            v_stop = safe_float_input("Enter stop voltage (V) [default 3]: ", 3)
-            v_step = safe_float_input("Enter voltage step (V) [default 0.05]: ", 0.05)
+            vgs_start = safe_float_input("Enter start Vgs (V) [default -1]: ", -1)
+            vgs_stop = safe_float_input("Enter stop Vgs (V) [default 3]: ", 3)
+            vgs_step = safe_float_input("Enter Vgs step (V) [default 0.05]: ", 0.05)
+            vds_constant = safe_float_input("Enter constant Vds (V) [default 5]: ", 5)
             compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
-            sweep_ch = safe_int_input("Enter PSPA sweep channel [default 1]: ", 1)
+            integration_time = input("Enter integration time (SHOR/MED/LONG) [default MED]: ").strip() or "MED"
+            drain_ch = safe_int_input("Enter PSPA drain channel [default 1]: ", 1)
+            source_ch = safe_int_input("Enter PSPA source channel [default 1]: ", 1)
             settle_s = safe_float_input("Enter settle time per step (s) [default 0.05]: ", 0.05)
 
             try:
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
-                    print("\nRunning Keithley sourcemeter sweep...")
+                    print("\nRunning Keithley transfer sweep...")
                     data = keithley.measure_voltage_sweep_current(
-                        pspa_inst, keithley.DEFAULT_GPIB_ADDRESS, v_start, v_stop, v_step,
-                        sweep_channel=sweep_ch, compliance=compliance, settle_s=settle_s
+                        pspa_inst, keithley.DEFAULT_GPIB_ADDRESS,
+                        vgs_start, vgs_stop, vgs_step, vds_constant,
+                        drain_channel=drain_ch, source_channel=source_ch,
+                        compliance=compliance, settle_s=settle_s,
+                        integration_time=integration_time
                     )
 
-                    csv_data = np.column_stack([data['Voltage'], data['Current']])
+                    dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
+                    csv_data = np.column_stack([data['Vgs'], data['Id'], dir_numeric])
                     file_management.save_csv(
-                        "keithley_sourcemeter_transistors.csv", csv_data, "Voltage_V, Current_A"
+                        "keithley_sourcemeter_transistors.csv",
+                        csv_data,
+                        "Vgs_V, Id_A, Sweep_Dir_0fwd_1rev"
                     )
 
-                    plt.figure(figsize=(10, 6))
-                    plt.plot(data['Voltage'], data['Current'] * 1e3, marker='o')
-                    plt.xlabel('Voltage (V)')
-                    plt.ylabel('Current (mA)')
-                    plt.title('Keithley Sourcemeter Transistors - Linear')
-                    plt.grid(True)
-                    plt.tight_layout()
-                    file_management.save_plot("keithley_sourcemeter_transistors_linear.png")
-                    plt.close()
+                    fwd = data['Sweep_Direction'] == 'forward'
+                    rev = data['Sweep_Direction'] == 'reverse'
 
-                    plt.figure(figsize=(10, 6))
-                    plt.semilogy(data['Voltage'], np.abs(data['Current']), marker='o')
-                    plt.xlabel('Voltage (V)')
-                    plt.ylabel('|Current| (A)')
-                    plt.title('Keithley Sourcemeter Transistors - Log')
-                    plt.grid(True)
-                    plt.tight_layout()
-                    file_management.save_plot("keithley_sourcemeter_transistors_log.png")
-                    plt.close()
+                    if choice == 12:
+                        plt.figure(figsize=(10, 6))
+                        plt.semilogy(data['Vgs'][fwd], np.abs(data['Id'][fwd]), marker='o', label='|Id| (fwd)')
+                        plt.semilogy(data['Vgs'][rev], np.abs(data['Id'][rev]), marker='s', label='|Id| (rev)')
+                        plt.xlabel('Vgs (V)')
+                        plt.ylabel('|Current| (A)')
+                        plt.title(f'Keithley Transfer Characteristics - Log (Vds = {vds_constant} V)')
+                        plt.grid(True)
+                        plt.legend()
+                        plt.tight_layout()
+                        file_management.save_plot("keithley_sourcemeter_transistors_log.png")
+                        plt.close()
+                    else:
+                        plt.figure(figsize=(10, 6))
+                        plt.plot(data['Vgs'][fwd], data['Id'][fwd] * 1e3, marker='o', label='Id (fwd)')
+                        plt.plot(data['Vgs'][rev], data['Id'][rev] * 1e3, marker='s', label='Id (rev)')
+                        plt.xlabel('Vgs (V)')
+                        plt.ylabel('Id (mA)')
+                        plt.title(f'Keithley Transfer Characteristics - Linear (Vds = {vds_constant} V)')
+                        plt.grid(True)
+                        plt.legend()
+                        plt.tight_layout()
+                        file_management.save_plot("keithley_sourcemeter_transistors_linear.png")
+                        plt.close()
 
                     print("Measurement complete. Data saved to output folder.")
             except Exception as e:
                 log.error("PSPA Keithley sourcemeter sweep failed: %s", e)
+                print(f"Error during measurement: {e}")
+
+        elif choice == 14:
+            # Keithley I-V Loop
+            print("PSPA: Keithley I-V Loop")
+
+            v_max = safe_float_input("Enter max voltage magnitude (V) [default 5]: ", 5)
+            v_step = safe_float_input("Enter voltage step (V) [default 0.1]: ", 0.1)
+            compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
+            force_ch = safe_int_input("Enter PSPA force channel [default 1]: ", 1)
+            integration_time = input("Enter integration time (SHOR/MED/LONG) [default MED]: ").strip() or "MED"
+            settle_s = safe_float_input("Enter settle time per step (s) [default 0.05]: ", 0.05)
+
+            try:
+                with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
+                    print("\nRunning Keithley I-V loop...")
+                    data = keithley.measure_voltage_loop_current(
+                        pspa_inst, keithley.DEFAULT_GPIB_ADDRESS,
+                        v_max, v_step, force_channel=force_ch,
+                        compliance=compliance, settle_s=settle_s,
+                        integration_time=integration_time
+                    )
+
+                    dir_numeric = np.array([0 if d == 'forward' else 1 if d == 'reverse' else 2 for d in data['Sweep_Direction']], dtype=float)
+                    csv_data = np.column_stack([data['Voltage'], data['Current'], dir_numeric])
+                    file_management.save_csv(
+                        "keithley_iv_loop.csv",
+                        csv_data,
+                        "Voltage_V, Current_A, Sweep_Dir_0fwd_1rev_2return"
+                    )
+
+                    fwd = data['Sweep_Direction'] == 'forward'
+                    rev = data['Sweep_Direction'] == 'reverse'
+                    ret = data['Sweep_Direction'] == 'return'
+
+                    plt.figure(figsize=(10, 6))
+                    plt.plot(data['Voltage'][fwd], data['Current'][fwd] * 1e3, marker='o', label='Id (fwd)')
+                    plt.plot(data['Voltage'][rev], data['Current'][rev] * 1e3, marker='s', label='Id (rev)')
+                    if np.any(ret):
+                        plt.plot(data['Voltage'][ret], data['Current'][ret] * 1e3, marker='^', label='Id (return)')
+                    plt.xlabel('Voltage (V)')
+                    plt.ylabel('Current (mA)')
+                    plt.title('Keithley I-V Loop - Linear')
+                    plt.grid(True)
+                    plt.legend()
+                    plt.tight_layout()
+                    file_management.save_plot("keithley_iv_loop_linear.png")
+                    plt.close()
+
+                    plt.figure(figsize=(10, 6))
+                    plt.semilogy(data['Voltage'][fwd], np.abs(data['Current'][fwd]), marker='o', label='|Id| (fwd)')
+                    plt.semilogy(data['Voltage'][rev], np.abs(data['Current'][rev]), marker='s', label='|Id| (rev)')
+                    if np.any(ret):
+                        plt.semilogy(data['Voltage'][ret], np.abs(data['Current'][ret]), marker='^', label='|Id| (return)')
+                    plt.xlabel('Voltage (V)')
+                    plt.ylabel('|Current| (A)')
+                    plt.title('Keithley I-V Loop - Log')
+                    plt.grid(True)
+                    plt.legend()
+                    plt.tight_layout()
+                    file_management.save_plot("keithley_iv_loop_log.png")
+                    plt.close()
+
+                    print("Measurement complete. Data saved to output folder.")
+            except Exception as e:
+                log.error("PSPA Keithley I-V loop failed: %s", e)
                 print(f"Error during measurement: {e}")
 
         repeat_input = input("\nDo you want to perform another measurement? (y/n): ").strip().lower()

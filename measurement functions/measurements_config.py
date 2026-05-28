@@ -50,7 +50,7 @@ PSPA_MEASUREMENTS = [
     "Gate Leakage Current",
     "Breakdown Voltage",
     "Resistance Measurement",
-    "3-Probe Transistor (Keithley 2400 + 4156C)",
+    "Keithley Sourcemeter Transistors",
 ]
 
 # The PSPA menu order shown to users maps directly to execution indices.
@@ -105,7 +105,7 @@ MEASUREMENT_HELP = {
     ("PSPA", 8): "Measures gate leakage current to see how much current flows through the gate stack.",
     ("PSPA", 9): "Sweeps voltage until the current reaches the breakdown threshold.",
     ("PSPA", 10): "Measures resistance by forcing current and reading the resulting voltage drop.",
-    ("PSPA", 11): "3-Probe transistor measurement: Keithley 2400 provides gate bias while 4156C characterizes drain/source with proper enable sequence (SMU2→SMU1→2400) and reverse shutdown.",
+    ("PSPA", 11): "Keithley sourcemeter transfer measurement with user-selected drain and source SMU channels and both linear and logarithmic plots.",
     ("LCR", 1): "Measures impedance magnitude and phase versus frequency with the LCR meter.",
     ("LCR", 2): "Measures capacitance and dissipation factor versus frequency with the LCR meter.",
     ("LCR", 3): "Measures inductance and quality factor versus frequency with the LCR meter.",
@@ -340,13 +340,15 @@ MEASUREMENT_PARAMS = {
                     ("Voltage Compliance (V)", "compliance", "10"),
                     ("Channel Number", "channel", "1"),
                     ("Sense Channel (same as force for 2-wire)", "sense_channel", "1")],
-    ("PSPA", 11): [("Start Vgs (V)", "vgs_start", "0.0"),
-                    ("Stop Vgs (V)", "vgs_stop", "5.0"),
-                    ("Vgs Step (V)", "vgs_step", "0.1"),
-                    ("Constant Vds (V)", "vds_constant", "5.0"),
+    ("PSPA", 11): [("Start Vgs (V)", "vgs_start", "-1"),
+                    ("Stop Vgs (V)", "vgs_stop", "3"),
+                    ("Vgs Step (V)", "vgs_step", "0.05"),
+                    ("Constant Vds (V)", "vds_constant", "5"),
                     ("Current Compliance (A)", "compliance", "0.1"),
                     ("Integration Time (SHOR/MED/LONG)", "integration_time", "MED"),
-                    ("Measurement Scale (Linear/Log/Both)", "plot_scale", "Both")],
+                    ("Measurement Scale (Linear/Log/Both)", "plot_scale", "Both"),
+                    ("Drain SMU Channel", "drain_ch", "1"),
+                    ("Source SMU Channel", "source_ch", "2")],
     
     # LCR Measurements
     ("LCR", 1): [("Start Frequency (Hz)", "freq_start", "20"),

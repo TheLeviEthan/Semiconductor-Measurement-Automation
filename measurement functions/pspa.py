@@ -229,6 +229,16 @@ def measure_channel_current(pspa, channel):
         return 0.0
 
 
+def measure_channel_voltage(pspa, channel):
+    """Perform a high-speed spot measurement of voltage using FLEX command TV?."""
+    try:
+        result_str = pspa.query(f"TV? {channel},0")
+        return parse_flex_number(result_str)
+    except Exception as e:
+        print(f"Error measuring voltage on CH{channel}: {e}")
+        return 0.0
+
+
 # =============================
 # Plot Display Functions
 # =============================
@@ -313,12 +323,8 @@ def configure_smu(pspa, channel, mode='VOLT', compliance=0.1):
         'compliance': compliance,
         'range': 0  # 0 = Auto Range
     }
-    # Enable the channel 
-    # Note: FLEX 'CN' command enables specified channels.
-    # We should ensure we don't accidentally disable others, but for simplicity
-    # this function just updates our state. The actual 'CN' is sent usually 
-    # as a group or we can send it here.
-    # Sending 'CN channel' enables that channel and leaves others as is (usually).
+    # Match the established PSPA transfer-characteristics flow: stage the
+    # selected channel immediately so subsequent DV/DI writes take effect.
     pspa.write(f"CN {channel}")
     print(f"Channel {channel} configured (State updated).")
 
@@ -357,6 +363,31 @@ def output_off(pspa, channel):
     """Disable output for a channel."""
     # CL [chnum] 
     pspa.write(f"CL {channel}")
+
+
+def configure_constant_voltage_source(pspa, channel, voltage, compliance=0.1):
+    """Compatibility wrapper for configuring a constant-voltage source channel."""
+    channel = validate_channel(channel)
+    validate_compliance(compliance)
+    configure_smu(pspa, channel, mode='VOLT', compliance=compliance)
+    set_voltage(pspa, channel, voltage)
+    output_on(pspa, channel)
+
+
+def start_constant_source(pspa):
+    """Compatibility wrapper for enabling the already-configured constant source."""
+    # The source channel is enabled by configure_constant_voltage_source().
+    return None
+
+
+def stop_constant_source(pspa):
+    """Compatibility wrapper for disabling the constant source setup."""
+    pspa.write("CL")
+
+
+def read_constant_source_current(pspa, channel):
+    """Compatibility wrapper for reading current from a configured source channel."""
+    return measure_channel_current(pspa, channel)
 
 # =============================
 # Helper Functions
@@ -463,6 +494,39 @@ def sweep_values(start: float, stop: float, step: float) -> np.ndarray:
 
     return vals
 
+
+def configure_transfer_bias(pspa, drain_ch, source_ch, vds_constant,
+                            compliance=0.1, integration_time="MED",
+                            gate_ch=None):
+    """Apply the standard PSPA transfer-style drain/source setup."""
+    drain_ch = validate_channel(drain_ch)
+    source_ch = validate_channel(source_ch)
+    gate_ch = validate_channel(gate_ch, allow_none=True)
+    validate_compliance(compliance)
+
+    pspa.write("US")
+    pspa.write("FMT 1")
+    pspa.write("CL")
+
+    configure_smu(pspa, drain_ch, mode='VOLT', compliance=compliance)
+    if gate_ch is not None:
+        configure_smu(pspa, gate_ch, mode='VOLT', compliance=compliance)
+    configure_smu(pspa, source_ch, mode='VOLT', compliance=compliance)
+
+    pspa.write(f"MM 1,{drain_ch}")
+    set_integration_time(pspa, integration_time)
+
+    set_voltage(pspa, source_ch, 0.0)
+    set_voltage(pspa, drain_ch, vds_constant)
+
+    if gate_ch is None:
+        pspa.write(f"CN {drain_ch},{source_ch}")
+    else:
+        pspa.write(f"CN {drain_ch},{gate_ch},{source_ch}")
+
+    time.sleep(0.5)
+    return drain_ch, gate_ch, source_ch
+
 # =============================
 # Transistor I-V Measurements
 # =============================
@@ -476,9 +540,9 @@ def measure_transistor_output_characteristics(pspa, vds_start, vds_stop, vds_ste
                                                drain_ch=1, gate_ch=2, source_ch=3,
                                                compliance=0.1):
     # Validate inputs
-    validate_channel(drain_ch)
-    validate_channel(gate_ch)
-    validate_channel(source_ch)
+    drain_ch = validate_channel(drain_ch)
+    gate_ch = validate_channel(gate_ch)
+    source_ch = validate_channel(source_ch)
     validate_compliance(compliance)
     validate_step(vds_step)
     validate_step(vgs_step)
@@ -573,33 +637,16 @@ def measure_transistor_transfer_characteristics(pspa, vgs_start, vgs_stop, vgs_s
     'Sweep_Direction' contains 'forward' or 'reverse' for each data point.
     """
     # Validate inputs
-    validate_channel(drain_ch)
-    validate_channel(gate_ch)
-    validate_channel(source_ch)
+    drain_ch = validate_channel(drain_ch)
+    gate_ch = validate_channel(gate_ch)
+    source_ch = validate_channel(source_ch)
     validate_compliance(compliance)
     validate_step(vgs_step)
     
-    # 1. Ensure FLEX mode is active and format is set
-    pspa.write("US")          # Switch to FLEX mode
-    pspa.write("FMT 1")       # Set ASCII format with header
-    
-    # 2. Configure channels and integration time
-    configure_smu(pspa, drain_ch, mode='VOLT', compliance=compliance)
-    configure_smu(pspa, gate_ch, mode='VOLT', compliance=compliance)
-    configure_smu(pspa, source_ch, mode='VOLT', compliance=compliance)
-
-    # 3. Set measurement mode to single-channel spot measurement
-    pspa.write(f"MM 1,{drain_ch}")  # MM 1 = single-channel spot
-    
-    # 4. Set integration time (default to MED)
-    set_integration_time(pspa, integration_time)
-    
-    # 5. Force constant drain voltage and ground source
-    set_voltage(pspa, source_ch, 0)
-    set_voltage(pspa, drain_ch, vds_constant)
-
-    # 6. Enable all relevant channels at once
-    pspa.write(f"CN {drain_ch},{gate_ch},{source_ch}")
+    # Use the same drain/source setup sequence as the Keithley+PSPA transfer path.
+    configure_transfer_bias(pspa, drain_ch, source_ch, vds_constant,
+                            compliance=compliance, integration_time=integration_time,
+                            gate_ch=gate_ch)
 
     vgs_array = []
     id_array = []
@@ -825,7 +872,7 @@ def measure_pulsed_iv(pspa, v_base, v_pulse, pulse_width, pulse_period, num_puls
     Measure pulsed IV using '1 Channel Pulsed Spot Measurement' mode (MM 3).
     """
     # Validate inputs
-    validate_channel(channel)
+    channel = validate_channel(channel)
     validate_compliance(compliance)
     if pulse_width <= 0 or pulse_period <= 0:
         raise ValueError("Pulse width and period must be positive")
@@ -909,9 +956,9 @@ def measure_pulsed_transistor(pspa, vds_pulse, vgs_pulse, vds_base, vgs_base,
     in this simplified implementation).
     """
     # Validate inputs
-    validate_channel(drain_ch)
-    validate_channel(gate_ch)
-    validate_channel(source_ch)
+    drain_ch = validate_channel(drain_ch)
+    gate_ch = validate_channel(gate_ch)
+    source_ch = validate_channel(source_ch)
     validate_compliance(compliance)
     if pulse_width <= 0 or pulse_period <= 0:
         raise ValueError("Pulse width and period must be positive")
