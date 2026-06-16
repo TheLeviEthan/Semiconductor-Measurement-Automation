@@ -309,7 +309,7 @@ def execute_pspa_gui(choice, params):
             file_management.save_plot("transistor_output_chars.png"); plt.close()
 
     elif choice == 2:
-        # Transistor Transfer Characteristics (Linear)
+        # Transistor Transfer Characteristics (Linear/Log/Both)
         vgs_start = float(params.get("vgs_start", -1))
         vgs_stop = float(params.get("vgs_stop", 3))
         vgs_step = float(params.get("vgs_step", 0.05))
@@ -319,6 +319,7 @@ def execute_pspa_gui(choice, params):
         gate_ch = int(float(params.get("gate_ch", 3)))
         source_ch = int(float(params.get("source_ch", 1)))
         integration_time = str(params.get("integration_time", "MED"))
+        plot_scale = params.get("plot_scale", "Both").strip()
 
         with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
             data = pspa.measure_transistor_transfer_characteristics(
@@ -330,43 +331,26 @@ def execute_pspa_gui(choice, params):
                 "Vgs_V, Id_A, Sweep_Dir_0fwd_1rev")
             fwd = data['Sweep_Direction'] == 'forward'
             rev = data['Sweep_Direction'] == 'reverse'
-            plt.figure(figsize=(10, 6))
-            plt.plot(data['Vgs'][fwd], data['Id'][fwd] * 1e3, marker='o', label='Id (fwd)')
-            plt.plot(data['Vgs'][rev], data['Id'][rev] * 1e3, marker='s', label='Id (rev)')
-            plt.xlabel('Vgs (V)'); plt.ylabel('Id (mA)')
-            plt.title(f'Transfer Chars (Vds = {vds_constant} V) - Linear')
-            plt.grid(True); plt.legend(); plt.tight_layout()
-            file_management.save_plot("transistor_transfer_chars_linear.png"); plt.close()
 
-    elif choice == 11:
-        # Transistor Transfer Characteristics (Log)
-        vgs_start = float(params.get("vgs_start", -1))
-        vgs_stop = float(params.get("vgs_stop", 3))
-        vgs_step = float(params.get("vgs_step", 0.05))
-        vds_constant = float(params.get("vds_constant", 5))
-        compliance = float(params.get("compliance", 0.1))
-        drain_ch = int(float(params.get("drain_ch", 2)))
-        gate_ch = int(float(params.get("gate_ch", 3)))
-        source_ch = int(float(params.get("source_ch", 1)))
-        integration_time = str(params.get("integration_time", "MED"))
+            # Linear plot
+            if plot_scale.lower() in ["linear", "both"]:
+                plt.figure(figsize=(10, 6))
+                plt.plot(data['Vgs'][fwd], data['Id'][fwd] * 1e3, marker='o', label='Id (fwd)')
+                plt.plot(data['Vgs'][rev], data['Id'][rev] * 1e3, marker='s', label='Id (rev)')
+                plt.xlabel('Vgs (V)'); plt.ylabel('Id (mA)')
+                plt.title(f'Transfer Chars (Vds = {vds_constant} V) - Linear')
+                plt.grid(True); plt.legend(); plt.tight_layout()
+                file_management.save_plot("transistor_transfer_chars_linear.png"); plt.close()
 
-        with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
-            data = pspa.measure_transistor_transfer_characteristics(
-                inst, vgs_start, vgs_stop, vgs_step, vds_constant,
-                drain_ch, gate_ch, source_ch, compliance, integration_time)
-            dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
-            file_management.save_csv("transistor_transfer_chars.csv",
-                np.column_stack([data['Vgs'], data['Id'], dir_numeric]),
-                "Vgs_V, Id_A, Sweep_Dir_0fwd_1rev")
-            fwd = data['Sweep_Direction'] == 'forward'
-            rev = data['Sweep_Direction'] == 'reverse'
-            plt.figure(figsize=(10, 6))
-            plt.semilogy(data['Vgs'][fwd], np.abs(data['Id'][fwd]), marker='o', label='|Id| (fwd)')
-            plt.semilogy(data['Vgs'][rev], np.abs(data['Id'][rev]), marker='s', label='|Id| (rev)')
-            plt.xlabel('Vgs (V)'); plt.ylabel('Current (A)')
-            plt.title(f'Transfer Chars (Vds = {vds_constant} V) - Log')
-            plt.grid(True); plt.legend(); plt.tight_layout()
-            file_management.save_plot("transistor_transfer_chars_log.png"); plt.close()
+            # Log plot
+            if plot_scale.lower() in ["log", "both"]:
+                plt.figure(figsize=(10, 6))
+                plt.semilogy(data['Vgs'][fwd], np.abs(data['Id'][fwd]), marker='o', label='|Id| (fwd)')
+                plt.semilogy(data['Vgs'][rev], np.abs(data['Id'][rev]), marker='s', label='|Id| (rev)')
+                plt.xlabel('Vgs (V)'); plt.ylabel('Current (A)')
+                plt.title(f'Transfer Chars (Vds = {vds_constant} V) - Log')
+                plt.grid(True); plt.legend(); plt.tight_layout()
+                file_management.save_plot("transistor_transfer_chars_log.png"); plt.close()
 
     elif choice == 3:
         # I-V Curve (Unidirectional)
@@ -375,13 +359,16 @@ def execute_pspa_gui(choice, params):
         v_step = float(params.get("v_step", 0.1))
         compliance = float(params.get("compliance", 0.1))
         channel = int(float(params.get("channel", 1)))
+        # Ground channel may be optional in the GUI; allow empty -> None
+        ground_raw = params.get("ground_ch", "")
+        ground_ch = None if str(ground_raw).strip() == "" else int(float(ground_raw))
         integration_time = str(params.get("integration_time", "MED"))
 
         with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
             data = pspa.measure_iv_curve(
                 inst, v_start, v_stop, v_step,
                 channel=channel, compliance=compliance,
-                integration_time=integration_time)
+                ground_ch=ground_ch, integration_time=integration_time)
             file_management.save_csv("iv_curve.csv",
                 np.column_stack([data['Voltage'], data['Current']]),
                 "Voltage_V, Current_A")
@@ -398,13 +385,15 @@ def execute_pspa_gui(choice, params):
         v_step = float(params.get("v_step", 0.1))
         compliance = float(params.get("compliance", 0.1))
         channel = int(float(params.get("channel", 1)))
+        ground_raw = params.get("ground_ch", "")
+        ground_ch = None if str(ground_raw).strip() == "" else int(float(ground_raw))
         integration_time = str(params.get("integration_time", "MED"))
 
         with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
             data = pspa.measure_iv_bidirectional(
                 inst, v_max, v_step,
                 channel=channel, compliance=compliance,
-                integration_time=integration_time)
+                ground_ch=ground_ch, integration_time=integration_time)
             file_management.save_csv("iv_curve_bidirectional.csv",
                 np.column_stack([data['Voltage'], data['Current']]),
                 "Voltage_V, Current_A")
@@ -566,36 +555,51 @@ def execute_pspa_gui(choice, params):
             plt.grid(True); plt.tight_layout()
             file_management.save_plot("resistance.png"); plt.close()
 
-    elif choice == 12:
-        # Keithley Sourcemeter Transistors
-        v_start = float(params.get("v_start", -1))
-        v_stop = float(params.get("v_stop", 3))
-        v_step = float(params.get("v_step", 0.05))
+    elif choice == 11:
+        # Keithley Sourcemeter Transfer Measurement
+        vgs_start = float(params.get("vgs_start", -1))
+        vgs_stop = float(params.get("vgs_stop", 3))
+        vgs_step = float(params.get("vgs_step", 0.05))
+        vds_constant = float(params.get("vds_constant", 5))
         compliance = float(params.get("compliance", 0.1))
-        sweep_ch = int(float(params.get("sweep_ch", 1)))
+        drain_ch = int(float(params.get("drain_ch", 1)))
+        source_ch = int(float(params.get("source_ch", 2)))
         settle_s = float(params.get("settle_s", 0.05))
+        integration_time = str(params.get("integration_time", "MED"))
+        plot_scale = str(params.get("plot_scale", "Both")).strip().lower()
 
         with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as inst:
             data = keithley.measure_voltage_sweep_current(
-                inst, keithley.DEFAULT_GPIB_ADDRESS, v_start, v_stop, v_step,
-                sweep_channel=sweep_ch, compliance=compliance, settle_s=settle_s)
+                inst, keithley.DEFAULT_GPIB_ADDRESS,
+                vgs_start, vgs_stop, vgs_step, vds_constant,
+                drain_channel=drain_ch, source_channel=source_ch,
+                compliance=compliance, settle_s=settle_s,
+                integration_time=integration_time)
+            dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
             file_management.save_csv("keithley_sourcemeter_transistors.csv",
-                np.column_stack([data['Voltage'], data['Current']]),
-                "Voltage_V, Current_A")
+                np.column_stack([data['Vgs'], data['Id'], dir_numeric]),
+                "Vgs_V, Id_A, Sweep_Dir_0fwd_1rev")
 
-            plt.figure(figsize=(10, 6))
-            plt.plot(data['Voltage'], data['Current'] * 1e3, marker='o')
-            plt.xlabel('Voltage (V)'); plt.ylabel('Current (mA)')
-            plt.title('Keithley Sourcemeter Transistors - Linear')
-            plt.grid(True); plt.tight_layout()
-            file_management.save_plot("keithley_sourcemeter_transistors_linear.png"); plt.close()
+            fwd = data['Sweep_Direction'] == 'forward'
+            rev = data['Sweep_Direction'] == 'reverse'
 
-            plt.figure(figsize=(10, 6))
-            plt.semilogy(data['Voltage'], np.abs(data['Current']), marker='o')
-            plt.xlabel('Voltage (V)'); plt.ylabel('|Current| (A)')
-            plt.title('Keithley Sourcemeter Transistors - Log')
-            plt.grid(True); plt.tight_layout()
-            file_management.save_plot("keithley_sourcemeter_transistors_log.png"); plt.close()
+            if plot_scale in ("linear", "both"):
+                plt.figure(figsize=(10, 6))
+                plt.plot(data['Vgs'][fwd], data['Id'][fwd] * 1e3, marker='o', label='Id (fwd)')
+                plt.plot(data['Vgs'][rev], data['Id'][rev] * 1e3, marker='s', label='Id (rev)')
+                plt.xlabel('Vgs (V)'); plt.ylabel('Id (mA)')
+                plt.title(f'Keithley Transfer Characteristics - Linear (Vds = {vds_constant} V)')
+                plt.grid(True); plt.legend(); plt.tight_layout()
+                file_management.save_plot("keithley_sourcemeter_transistors_linear.png"); plt.close()
+
+            if plot_scale in ("log", "both"):
+                plt.figure(figsize=(10, 6))
+                plt.semilogy(data['Vgs'][fwd], np.abs(data['Id'][fwd]), marker='o', label='|Id| (fwd)')
+                plt.semilogy(data['Vgs'][rev], np.abs(data['Id'][rev]), marker='s', label='|Id| (rev)')
+                plt.xlabel('Vgs (V)'); plt.ylabel('|Current| (A)')
+                plt.title(f'Keithley Transfer Characteristics - Log (Vds = {vds_constant} V)')
+                plt.grid(True); plt.legend(); plt.tight_layout()
+                file_management.save_plot("keithley_sourcemeter_transistors_log.png"); plt.close()
 
     else:
         raise ValueError(f"Unknown PSPA measurement index: {choice}")

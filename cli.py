@@ -2079,53 +2079,136 @@ def execute_pspa_measurement(choice):
                 log.error("PSPA resistance failed: %s", e)
                 print(f"Error during measurement: {e}")
 
-        elif choice == 12:
-            # Keithley Sourcemeter Transistors
+        elif choice in (12, 13):
+            # Keithley Sourcemeter Transistors (Log / Linear)
             print("PSPA: Keithley Sourcemeter Transistors")
 
-            v_start = safe_float_input("Enter start voltage (V) [default -1]: ", -1)
-            v_stop = safe_float_input("Enter stop voltage (V) [default 3]: ", 3)
-            v_step = safe_float_input("Enter voltage step (V) [default 0.05]: ", 0.05)
+            vgs_start = safe_float_input("Enter start Vgs (V) [default -1]: ", -1)
+            vgs_stop = safe_float_input("Enter stop Vgs (V) [default 3]: ", 3)
+            vgs_step = safe_float_input("Enter Vgs step (V) [default 0.05]: ", 0.05)
+            vds_constant = safe_float_input("Enter constant Vds (V) [default 5]: ", 5)
             compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
-            sweep_ch = safe_int_input("Enter PSPA sweep channel [default 1]: ", 1)
+            integration_time = input("Enter integration time (SHOR/MED/LONG) [default MED]: ").strip() or "MED"
+            drain_ch = safe_int_input("Enter PSPA drain channel [default 1]: ", 1)
+            source_ch = safe_int_input("Enter PSPA source channel [default 1]: ", 1)
             settle_s = safe_float_input("Enter settle time per step (s) [default 0.05]: ", 0.05)
 
             try:
                 with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
-                    print("\nRunning Keithley sourcemeter sweep...")
+                    print("\nRunning Keithley transfer sweep...")
                     data = keithley.measure_voltage_sweep_current(
-                        pspa_inst, keithley.DEFAULT_GPIB_ADDRESS, v_start, v_stop, v_step,
-                        sweep_channel=sweep_ch, compliance=compliance, settle_s=settle_s
+                        pspa_inst, keithley.DEFAULT_GPIB_ADDRESS,
+                        vgs_start, vgs_stop, vgs_step, vds_constant,
+                        drain_channel=drain_ch, source_channel=source_ch,
+                        compliance=compliance, settle_s=settle_s,
+                        integration_time=integration_time
                     )
 
-                    csv_data = np.column_stack([data['Voltage'], data['Current']])
+                    dir_numeric = np.array([0 if d == 'forward' else 1 for d in data['Sweep_Direction']], dtype=float)
+                    csv_data = np.column_stack([data['Vgs'], data['Id'], dir_numeric])
                     file_management.save_csv(
-                        "keithley_sourcemeter_transistors.csv", csv_data, "Voltage_V, Current_A"
+                        "keithley_sourcemeter_transistors.csv",
+                        csv_data,
+                        "Vgs_V, Id_A, Sweep_Dir_0fwd_1rev"
                     )
 
-                    plt.figure(figsize=(10, 6))
-                    plt.plot(data['Voltage'], data['Current'] * 1e3, marker='o')
-                    plt.xlabel('Voltage (V)')
-                    plt.ylabel('Current (mA)')
-                    plt.title('Keithley Sourcemeter Transistors - Linear')
-                    plt.grid(True)
-                    plt.tight_layout()
-                    file_management.save_plot("keithley_sourcemeter_transistors_linear.png")
-                    plt.close()
+                    fwd = data['Sweep_Direction'] == 'forward'
+                    rev = data['Sweep_Direction'] == 'reverse'
 
-                    plt.figure(figsize=(10, 6))
-                    plt.semilogy(data['Voltage'], np.abs(data['Current']), marker='o')
-                    plt.xlabel('Voltage (V)')
-                    plt.ylabel('|Current| (A)')
-                    plt.title('Keithley Sourcemeter Transistors - Log')
-                    plt.grid(True)
-                    plt.tight_layout()
-                    file_management.save_plot("keithley_sourcemeter_transistors_log.png")
-                    plt.close()
+                    if choice == 12:
+                        plt.figure(figsize=(10, 6))
+                        plt.semilogy(data['Vgs'][fwd], np.abs(data['Id'][fwd]), marker='o', label='|Id| (fwd)')
+                        plt.semilogy(data['Vgs'][rev], np.abs(data['Id'][rev]), marker='s', label='|Id| (rev)')
+                        plt.xlabel('Vgs (V)')
+                        plt.ylabel('|Current| (A)')
+                        plt.title(f'Keithley Transfer Characteristics - Log (Vds = {vds_constant} V)')
+                        plt.grid(True)
+                        plt.legend()
+                        plt.tight_layout()
+                        file_management.save_plot("keithley_sourcemeter_transistors_log.png")
+                        plt.close()
+                    else:
+                        plt.figure(figsize=(10, 6))
+                        plt.plot(data['Vgs'][fwd], data['Id'][fwd] * 1e3, marker='o', label='Id (fwd)')
+                        plt.plot(data['Vgs'][rev], data['Id'][rev] * 1e3, marker='s', label='Id (rev)')
+                        plt.xlabel('Vgs (V)')
+                        plt.ylabel('Id (mA)')
+                        plt.title(f'Keithley Transfer Characteristics - Linear (Vds = {vds_constant} V)')
+                        plt.grid(True)
+                        plt.legend()
+                        plt.tight_layout()
+                        file_management.save_plot("keithley_sourcemeter_transistors_linear.png")
+                        plt.close()
 
                     print("Measurement complete. Data saved to output folder.")
             except Exception as e:
                 log.error("PSPA Keithley sourcemeter sweep failed: %s", e)
+                print(f"Error during measurement: {e}")
+
+        elif choice == 14:
+            # Keithley I-V Loop
+            print("PSPA: Keithley I-V Loop")
+
+            v_max = safe_float_input("Enter max voltage magnitude (V) [default 5]: ", 5)
+            v_step = safe_float_input("Enter voltage step (V) [default 0.1]: ", 0.1)
+            compliance = safe_float_input("Enter current compliance (A) [default 0.1]: ", 0.1)
+            force_ch = safe_int_input("Enter PSPA force channel [default 1]: ", 1)
+            integration_time = input("Enter integration time (SHOR/MED/LONG) [default MED]: ").strip() or "MED"
+            settle_s = safe_float_input("Enter settle time per step (s) [default 0.05]: ", 0.05)
+
+            try:
+                with InstrumentSession(pspa.connect_pspa, pspa.disconnect_pspa) as pspa_inst:
+                    print("\nRunning Keithley I-V loop...")
+                    data = keithley.measure_voltage_loop_current(
+                        pspa_inst, keithley.DEFAULT_GPIB_ADDRESS,
+                        v_max, v_step, force_channel=force_ch,
+                        compliance=compliance, settle_s=settle_s,
+                        integration_time=integration_time
+                    )
+
+                    dir_numeric = np.array([0 if d == 'forward' else 1 if d == 'reverse' else 2 for d in data['Sweep_Direction']], dtype=float)
+                    csv_data = np.column_stack([data['Voltage'], data['Current'], dir_numeric])
+                    file_management.save_csv(
+                        "keithley_iv_loop.csv",
+                        csv_data,
+                        "Voltage_V, Current_A, Sweep_Dir_0fwd_1rev_2return"
+                    )
+
+                    fwd = data['Sweep_Direction'] == 'forward'
+                    rev = data['Sweep_Direction'] == 'reverse'
+                    ret = data['Sweep_Direction'] == 'return'
+
+                    plt.figure(figsize=(10, 6))
+                    plt.plot(data['Voltage'][fwd], data['Current'][fwd] * 1e3, marker='o', label='Id (fwd)')
+                    plt.plot(data['Voltage'][rev], data['Current'][rev] * 1e3, marker='s', label='Id (rev)')
+                    if np.any(ret):
+                        plt.plot(data['Voltage'][ret], data['Current'][ret] * 1e3, marker='^', label='Id (return)')
+                    plt.xlabel('Voltage (V)')
+                    plt.ylabel('Current (mA)')
+                    plt.title('Keithley I-V Loop - Linear')
+                    plt.grid(True)
+                    plt.legend()
+                    plt.tight_layout()
+                    file_management.save_plot("keithley_iv_loop_linear.png")
+                    plt.close()
+
+                    plt.figure(figsize=(10, 6))
+                    plt.semilogy(data['Voltage'][fwd], np.abs(data['Current'][fwd]), marker='o', label='|Id| (fwd)')
+                    plt.semilogy(data['Voltage'][rev], np.abs(data['Current'][rev]), marker='s', label='|Id| (rev)')
+                    if np.any(ret):
+                        plt.semilogy(data['Voltage'][ret], np.abs(data['Current'][ret]), marker='^', label='|Id| (return)')
+                    plt.xlabel('Voltage (V)')
+                    plt.ylabel('|Current| (A)')
+                    plt.title('Keithley I-V Loop - Log')
+                    plt.grid(True)
+                    plt.legend()
+                    plt.tight_layout()
+                    file_management.save_plot("keithley_iv_loop_log.png")
+                    plt.close()
+
+                    print("Measurement complete. Data saved to output folder.")
+            except Exception as e:
+                log.error("PSPA Keithley I-V loop failed: %s", e)
                 print(f"Error during measurement: {e}")
 
         repeat_input = input("\nDo you want to perform another measurement? (y/n): ").strip().lower()
