@@ -39,7 +39,7 @@ import numpy as np
 import time
 import logging
 from dielectric_utils import compute_eps_r_from_area
-from gpib_utils import prompt_bool, safe_float_input
+from gpib_utils import create_visa_resource_manager, prompt_bool, safe_float_input
 
 log = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ def connect_e4980a(resource_name=None):
         resource_name = GPIB_ADDRESS
     
     try:
-        rm = pyvisa.ResourceManager()
+        rm = create_visa_resource_manager()
         print(f"Attempting to connect to: {resource_name}")
         inst = rm.open_resource(resource_name)
         inst.timeout = 30000  # 30 second timeout

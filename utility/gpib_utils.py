@@ -27,7 +27,33 @@ import functools
 import logging
 import time
 
+import pyvisa
+
 log = logging.getLogger(__name__)
+
+
+def create_visa_resource_manager():
+    """Return a VISA resource manager with a backend fallback.
+
+    PyVISA on Windows normally uses the vendor VISA library. If that library
+    is not installed, fall back to the pure-Python `pyvisa-py` backend when it
+    is available.
+    """
+    errors = []
+    for backend in (None, "@py"):
+        try:
+            if backend is None:
+                return pyvisa.ResourceManager()
+            return pyvisa.ResourceManager(backend)
+        except Exception as exc:
+            label = "default VISA backend" if backend is None else "pyvisa-py backend"
+            errors.append(f"{label}: {exc}")
+
+    raise RuntimeError(
+        "Unable to initialize a VISA backend. Tried the default VISA library "
+        "and pyvisa-py. Install NI-VISA or `pyvisa-py` and try again. Details: "
+        + "; ".join(errors)
+    )
 
 # ============================================================
 # Retry decorator for VISA calls

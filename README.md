@@ -17,6 +17,16 @@ Automated measurements for PIA (4294A), PSPA (4155C/4156C), LCR (E4980A), and a 
 3. Enter target temperature, ramp rate, and measurement interval.
 4. Queue measurements and start the sweep.
 
+## Installing Dependencies
+
+Run the bundled installer from the project root:
+
+`python install_dependencies.py`
+
+The script installs the Python packages listed in `requirements.txt`.
+For GPIB instruments on Windows, NI-VISA or another compatible VISA
+implementation is still required separately.
+
 ## GUI Usage
 
 1. Run `python main.py --gui`.

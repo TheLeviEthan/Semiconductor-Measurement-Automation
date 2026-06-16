@@ -34,7 +34,7 @@ import numpy as np
 import logging
 import config
 from dielectric_utils import compute_eps_r_from_area
-from gpib_utils import prompt_bool, safe_float_input, safe_int_input
+from gpib_utils import create_visa_resource_manager, prompt_bool, safe_float_input, safe_int_input
 
 log = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ def connect_4294a(resource_name=None):
     if not target:
         raise RuntimeError("PIA GPIB address is empty. Set gpib.pia in config.yaml.")
 
-    rm = pyvisa.ResourceManager()
+    rm = create_visa_resource_manager()
     try:
         inst = rm.open_resource(target)
     except Exception as exc:
@@ -457,20 +457,21 @@ def measure_single_cv_cycle(inst, freq_hz, v_min, v_max, n_points):
     Sweep order is preserved: v_min → v_max → v_min.
     """
     set_frequency(inst, freq_hz)
+    inst.write("DCO ON")
 
     # Sweep UP: v_min → v_max
     set_dc_bias_sweep(inst, v_min, v_max, n_points, direction="UP")
     single_sweep_and_wait(inst)
     inst.write("TRAC A")
     inst.write("AUTO")
-    v_up = read_sweep_axis(inst)
+    v_up = np.linspace(v_min, v_max, n_points)
     cp_up = read_trace_main(inst, trace="A")
 
     # Sweep DOWN: v_max → v_min
-    set_dc_bias_sweep(inst, v_min, v_max, n_points, direction="DOWN")
+    set_dc_bias_sweep(inst, v_max, v_min, n_points, direction="DOWN")
     inst.write("TRAC A")
     inst.write("AUTO")
-    v_down = read_sweep_axis(inst)
+    v_down = np.linspace(v_max, v_min, n_points)
     cp_down = read_trace_main(inst, trace="A")
 
     # Combine into a single "butterfly" trace in actual sweep order

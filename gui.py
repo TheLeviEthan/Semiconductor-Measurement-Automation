@@ -164,7 +164,8 @@ class MeasurementGUI:
 
         # USB switchbox (multiplexer) control
         self.switchbox = usb_switchbox.create_switchbox_from_config()
-        self.switchbox_enabled_var = tk.BooleanVar(value=self.switchbox.enabled)
+        self.switchbox.set_enabled(True)
+        self.switchbox_enabled_var = tk.BooleanVar(value=True)
         self.switchbox_status_var = tk.StringVar()
         self._instrument_buttons_layout_in_progress = False
         self._instrument_buttons_last_width = None
@@ -741,6 +742,7 @@ class MeasurementGUI:
     def route_switchbox(self, instrument, raise_on_error=True):
         """Route USB switchbox to the requested instrument if enabled."""
         if not self.switchbox_enabled_var.get():
+            self.update_switchbox_status("Routing inactive")
             return
 
         self.switchbox.set_enabled(True)

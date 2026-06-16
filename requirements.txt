@@ -1,0 +1,14 @@
+# Core numerical/plotting stack
+numpy
+matplotlib
+
+# VISA communication and the pure-Python backend fallback
+pyvisa
+pyvisa-py
+
+# GUI image handling and YAML config loading
+Pillow
+PyYAML
+
+# USB switchbox serial transport
+pyserial

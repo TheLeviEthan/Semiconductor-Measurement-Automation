@@ -16,6 +16,7 @@ import numpy as np
 import pyvisa
 
 import pspa
+from utility.gpib_utils import create_visa_resource_manager
 
 log = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ def connect_keithley_sourcemeter(resource_name=None):
     if not target:
         raise ValueError("Keithley GPIB address not configured")
 
-    rm = pyvisa.ResourceManager()
+    rm = create_visa_resource_manager()
     print(f"Attempting to connect Keithley sourcemeter to: {target}")
     keithley = rm.open_resource(target)
     keithley.timeout = pspa.DEFAULT_TIMEOUT_MS

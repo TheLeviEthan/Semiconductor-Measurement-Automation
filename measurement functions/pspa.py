@@ -35,6 +35,8 @@ import re
 import time
 import logging
 
+from utility.gpib_utils import create_visa_resource_manager
+
 log = logging.getLogger(__name__)
 
 # =============================
@@ -78,7 +80,7 @@ def parse_flex_number(s: str) -> float:
 def list_visa_resources():
     """List all available VISA resources."""
     try:
-        rm = pyvisa.ResourceManager()
+        rm = create_visa_resource_manager()
         resources = rm.list_resources()
         return list(resources)
     except Exception as e:
@@ -98,7 +100,7 @@ def connect_pspa(gpib_address=None):
         raise ValueError("GPIB address not configured")
     
     try:
-        rm = pyvisa.ResourceManager()
+        rm = create_visa_resource_manager()
         print(f"Attempting to connect to: {gpib_address}")
         pspa = rm.open_resource(gpib_address)
         pspa.timeout = DEFAULT_TIMEOUT_MS

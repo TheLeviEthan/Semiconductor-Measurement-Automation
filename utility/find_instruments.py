@@ -16,6 +16,7 @@ an instrument has been moved to a different GPIB address.
 """
 
 import pyvisa
+from gpib_utils import create_visa_resource_manager
 
 def main():
     print("="*60)
@@ -23,7 +24,7 @@ def main():
     print("="*60)
     
     try:
-        rm = pyvisa.ResourceManager()
+        rm = create_visa_resource_manager()
         print(f"\nVISA Library: {rm}")
         
         resources = rm.list_resources()

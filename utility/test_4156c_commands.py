@@ -19,6 +19,7 @@ How to use:
 
 import pyvisa
 import time
+from gpib_utils import create_visa_resource_manager
 
 # UPDATE THIS with your actual GPIB address
 GPIB_ADDRESS = "GPIB0::16::INSTR"  # e.g., "GPIB0::17::INSTR"
@@ -32,7 +33,7 @@ def test_4156c_commands():
         return
     
     try:
-        rm = pyvisa.ResourceManager('@py')
+        rm = create_visa_resource_manager()
         print(f"Connecting to {GPIB_ADDRESS}...")
         pspa = rm.open_resource(GPIB_ADDRESS)
         pspa.timeout = 30000
