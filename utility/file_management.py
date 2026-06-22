@@ -255,10 +255,18 @@ def save_plot(filename: str, fig=None, dpi: int = 300) -> str:
 
 def save_cycle_plot(title: str, x_label: str, y_label: str,
                     cycles_x, cycles_y, base_filename: str,
-                    dpi: int = 300) -> str:
+                    dpi: int = 300, split_half: bool = False) -> str:
     """Save a multi-cycle linear overlay plot to ``output/images/``.
 
     Thread-safe — uses the explicit Figure API.
+
+    Parameters
+    ----------
+    split_half : bool
+        When True, a NaN break is inserted at the midpoint of each cycle's
+        arrays before plotting.  This separates UP and DOWN sweep halves into
+        two visually distinct curves — the standard presentation for C-V
+        butterfly plots (matches the original LEGACY dielectric_meas.py style).
     """
     images_dir = os.path.join(output_dir, "images")
     ensure_output_dir(images_dir)
@@ -273,6 +281,10 @@ def save_cycle_plot(title: str, x_label: str, y_label: str,
     fig = Figure()
     ax = fig.add_subplot(111)
     for idx, (x_vals, y_vals) in enumerate(zip(cycles_x, cycles_y_disp), start=1):
+        if split_half:
+            mid = len(x_vals) // 2
+            x_vals = np.insert(np.asarray(x_vals, dtype=float), mid, np.nan)
+            y_vals = np.insert(np.asarray(y_vals, dtype=float), mid, np.nan)
         ax.plot(x_vals, y_vals, "-o", markersize=3, label=f"Cycle {idx}")
     ax.set_xlabel(x_label)
     ax.set_ylabel(y_label_disp)

@@ -429,66 +429,6 @@ def _pia_safe_close(inst):
     inst.close()
 
 
-def _pia_cv_butterfly(plot_mode="cp"):
-    """
-    Shared C-V butterfly measurement for PIA choices 5 and 6.
-
-    Args:
-        plot_mode: "cp" to save Cp plot, "eps" to save εr plot.
-    """
-    label = "Cp vs Voltage" if plot_mode == "cp" else "Permittivity vs Voltage"
-    print(f"C–V Butterfly Cycle: {label}")
-
-    freq_cv = safe_float_input("Enter measurement frequency (Hz) [default 25000]: ", 25000)
-    v_min = safe_float_input("Enter minimum voltage (V) [default 0]: ", 0)
-    v_max = safe_float_input("Enter maximum voltage (V) [default 5]: ", 5)
-    n_points = safe_int_input("Enter number of points per sweep [default 401]: ", 401)
-    n_cycles = safe_int_input("Enter number of cycles [default 1]: ", 1)
-    thickness_nm, area_um2 = _prompt_hzo_geometry_inputs()
-
-    with InstrumentSession(pia.setup, _pia_safe_close) as inst:
-        pia.initialize_4294a_for_cpd(inst)
-
-        all_v_cycles = []
-        all_cp_cycles = []
-        all_eps_cycles = []
-        all_cycle_idx = []
-
-        for cycle in range(n_cycles):
-            print(f"Running C–V cycle {cycle + 1}/{n_cycles}...")
-            v, cp = pia.measure_single_cv_cycle(inst, freq_cv, v_min, v_max, n_points)
-            eps_r = pia.compute_eps_r(cp, thickness_nm, area_um2)
-
-            all_v_cycles.append(v)
-            all_cp_cycles.append(cp)
-            all_eps_cycles.append(eps_r)
-            all_cycle_idx.append(np.full_like(v, cycle + 1, dtype=int))
-
-        # Flatten for CSV
-        v_all = np.concatenate(all_v_cycles)
-        cp_all = np.concatenate(all_cp_cycles)
-        eps_all = np.concatenate(all_eps_cycles)
-        cycles_all = np.concatenate(all_cycle_idx)
-
-        csv_data = np.column_stack([cycles_all, v_all, cp_all, eps_all])
-        file_management.save_csv(
-            "cv_dielectric_cycles.csv", csv_data,
-            "cycle_index, bias_V, Cp_F, eps_r"
-        )
-
-        if plot_mode == "cp":
-            file_management.save_cycle_plot(
-                "C-V Butterfly: Cp vs Voltage", "Bias Voltage (V)", "Cp (F)",
-                all_v_cycles, all_cp_cycles, "cv_butterfly_cp.png",
-            )
-        else:
-            file_management.save_cycle_plot(
-                "C-V Butterfly: εr vs Voltage", "Bias Voltage (V)",
-                "Dielectric constant εr",
-                all_v_cycles, all_eps_cycles, "cv_butterfly_eps_r.png",
-            )
-        log.info("C–V %s measurement complete", label)
-        print(f"C–V {label} measurement complete. Data saved to output folder.")
 
 
 def _prompt_hzo_geometry_inputs():
@@ -523,8 +463,8 @@ def _prepare_pia_cryo(choice):
     name = pia_measurements[choice - 1]
     print(f"\n  Configuring: {name}")
 
-    if choice in (1, 2):
-        # Impedance Magnitude / Phase vs Frequency
+    if choice == 1:
+        # Impedance (|Z| & Phase) vs Frequency
         freq_start, freq_stop, num_points, apply_dc_bias, dc_bias_v = _pia_get_params()
 
         def run():
@@ -533,108 +473,129 @@ def _prepare_pia_cryo(choice):
                 pia.configure_dc_bias(inst, apply_dc_bias, dc_bias_v)
                 freq_axis, z_mag, theta_deg = pia.measure_impedance_vs_freq(
                     inst, freq_start, freq_stop, num_points)
-                y_label = "|Z| (Ohm)" if choice == 1 else "Phase (Degrees)"
-                y_data = z_mag if choice == 1 else theta_deg
-                file_management.save_image(
-                    name, "Frequency (Hz)", freq_axis, y_label, y_data,
-                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
                 z_real = z_mag * np.cos(np.deg2rad(theta_deg))
                 z_imag = z_mag * np.sin(np.deg2rad(theta_deg))
                 file_management.save_csv("impedance_data.csv",
                     np.column_stack([freq_axis, z_mag, theta_deg, z_real, z_imag]),
                     "frequency_Hz, Z_mag_ohm, theta_deg, Z_real_ohm, Z_imag_ohm")
+                file_management.save_image("|Z| vs Frequency", "Frequency (Hz)",
+                    freq_axis, "|Z| (Ohm)", z_mag,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
+                file_management.save_image("Phase vs Frequency", "Frequency (Hz)",
+                    freq_axis, "Phase θ (Degrees)", theta_deg,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
+                file_management.save_image("Z_real vs Frequency", "Frequency (Hz)",
+                    freq_axis, "Z_real (Ohm)", z_real,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
+                file_management.save_image("Z_imag vs Frequency", "Frequency (Hz)",
+                    freq_axis, "Z_imag (Ohm)", z_imag,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
         return name, run
 
-    elif choice in (3, 4):
-        # Capacitance / Tan Loss vs Frequency
+    elif choice == 2:
+        # Dielectrics: CPD frequency sweep only
         freq_start, freq_stop, num_points, apply_dc_bias, dc_bias_v = _pia_get_params()
+        thickness_nm, area_um2 = _prompt_hzo_geometry_inputs()
+
+        _EPS0 = 8.854187817e-12
+        _t_m = thickness_nm * 1e-9
+        _a_m2 = area_um2 * 1e-12
 
         def run():
             with InstrumentSession(pia.setup, _pia_safe_close) as inst:
                 pia.initialize_4294a_for_cpd(inst)
                 pia.configure_dc_bias(inst, apply_dc_bias, dc_bias_v)
+
                 freq_axis, cp_vals, d_vals = pia.measure_cpd_vs_freq(
                     inst, freq_start, freq_stop, num_points)
-                y_label = "Cp (F)" if choice == 3 else "D (loss factor)"
-                y_data = cp_vals if choice == 3 else d_vals
-                file_management.save_image(
-                    name, "Frequency (Hz)", freq_axis, y_label, y_data,
+                eps_r_f = cp_vals * _t_m / (_EPS0 * _a_m2)
+                eps_r_imag_f = eps_r_f * np.abs(d_vals)
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    rp_f = np.where(
+                        (np.abs(cp_vals) > 0) & (np.abs(d_vals) > 0),
+                        1.0 / (2 * np.pi * freq_axis * np.abs(cp_vals) * np.abs(d_vals)),
+                        0.0)
+
+                output_path = file_management.ensure_output_dir()
+                csv_path = file_management.uniquify(
+                    os.path.join(output_path, "dielectrics_data.csv"))
+                with open(csv_path, "w") as f:
+                    f.write("frequency_Hz,Cp_F,D,eps_r,eps_r_imag,Rp_ohm\n")
+                    for i in range(len(freq_axis)):
+                        f.write(f"{freq_axis[i]:.6e},{cp_vals[i]:.6e},{d_vals[i]:.6e},"
+                                f"{eps_r_f[i]:.6e},{eps_r_imag_f[i]:.6e},{rp_f[i]:.6e}\n")
+
+                file_management.save_image("εr vs Frequency", "Frequency (Hz)",
+                    freq_axis, "Dielectric constant εr", eps_r_f,
                     APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
-                file_management.save_csv("cpd_data.csv",
-                    np.column_stack([freq_axis, cp_vals, d_vals]),
-                    "frequency_Hz, Cp_F, D")
+                file_management.save_image("Cp vs Frequency", "Frequency (Hz)",
+                    freq_axis, "Cp (F)", cp_vals,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
+                file_management.save_image("D (Tan Loss) vs Frequency", "Frequency (Hz)",
+                    freq_axis, "D (loss factor)", d_vals,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
+                file_management.save_image("εr″ vs Frequency", "Frequency (Hz)",
+                    freq_axis, "εr″ (imaginary permittivity)", eps_r_imag_f,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
         return name, run
 
-    elif choice in (5, 6):
-        # C–V Butterfly: Cp / εr vs Voltage
-        plot_mode = "cp" if choice == 5 else "eps"
-        freq_cv = safe_float_input("Enter measurement frequency (Hz) [default 25000]: ", 25000)
-        v_min = safe_float_input("Enter minimum voltage (V) [default 0]: ", 0)
-        v_max = safe_float_input("Enter maximum voltage (V) [default 5]: ", 5)
-        n_points = safe_int_input("Enter number of points per sweep [default 401]: ", 401)
-        n_cycles = safe_int_input("Enter number of cycles [default 1]: ", 1)
+    elif choice == 3:
+        # C-V Butterfly Cycles
         thickness_nm, area_um2 = _prompt_hzo_geometry_inputs()
+        freq_cv = safe_float_input("Enter C-V measurement frequency (Hz) [default 25000]: ", 25000)
+        v_min = safe_float_input("Enter C-V minimum voltage (V) [default 0]: ", 0)
+        v_max = safe_float_input("Enter C-V maximum voltage (V) [default 5]: ", 5)
+        n_cv_pts = safe_int_input("Enter number of C-V points per sweep [default 401]: ", 401)
+        n_cycles = safe_int_input("Enter number of C-V cycles [default 1]: ", 1)
+
+        _EPS0 = 8.854187817e-12
+        _t_m = thickness_nm * 1e-9
+        _a_m2 = area_um2 * 1e-12
 
         def run():
             with InstrumentSession(pia.setup, _pia_safe_close) as inst:
                 pia.initialize_4294a_for_cpd(inst)
-                all_v, all_cp, all_eps, all_idx = [], [], [], []
-                for cyc in range(n_cycles):
-                    v, cp = pia.measure_single_cv_cycle(inst, freq_cv, v_min, v_max, n_points)
-                    eps_r = pia.compute_eps_r(cp, thickness_nm, area_um2)
-                    all_v.append(v); all_cp.append(cp); all_eps.append(eps_r)
-                    all_idx.append(np.full_like(v, cyc + 1, dtype=int))
-                file_management.save_csv("cv_dielectric_cycles.csv",
-                    np.column_stack([np.concatenate(all_idx), np.concatenate(all_v),
-                                     np.concatenate(all_cp), np.concatenate(all_eps)]),
-                    "cycle_index, bias_V, Cp_F, eps_r")
-                if plot_mode == "cp":
-                    file_management.save_cycle_plot("C-V Butterfly: Cp vs Voltage",
-                        "Bias Voltage (V)", "Cp (F)", all_v, all_cp, "cv_butterfly_cp.png")
-                else:
-                    file_management.save_cycle_plot("C-V Butterfly: εr vs Voltage",
-                        "Bias Voltage (V)", "Dielectric constant εr",
-                        all_v, all_eps, "cv_butterfly_eps_r.png")
+
+                all_v, all_cp, all_d, all_eps = [], [], [], []
+                for _ in range(n_cycles):
+                    v, cp, d = pia.measure_single_cv_cycle_full(
+                        inst, freq_cv, v_min, v_max, n_cv_pts)
+                    all_v.append(v)
+                    all_cp.append(cp)
+                    all_d.append(d)
+                    all_eps.append(cp * _t_m / (_EPS0 * _a_m2))
+
+                output_path = file_management.ensure_output_dir()
+                csv_path = file_management.uniquify(
+                    os.path.join(output_path, "cv_butterfly_data.csv"))
+                with open(csv_path, "w") as f:
+                    f.write(f"# C-V Butterfly Cycles (freq={freq_cv:.0f} Hz, {n_cycles} cycle(s))\n")
+                    f.write("cycle,bias_V,Cp_F,D,eps_r,Rp_ohm\n")
+                    for ci in range(n_cycles):
+                        v_c, cp_c, d_c, eps_c = (
+                            all_v[ci], all_cp[ci], all_d[ci], all_eps[ci])
+                        with np.errstate(divide='ignore', invalid='ignore'):
+                            rp_c = np.where(
+                                (np.abs(cp_c) > 0) & (np.abs(d_c) > 0),
+                                1.0 / (2 * np.pi * freq_cv * np.abs(cp_c) * np.abs(d_c)),
+                                0.0)
+                        for j in range(len(v_c)):
+                            f.write(f"{ci + 1},{v_c[j]:.4f},{cp_c[j]:.6e},{d_c[j]:.6e},"
+                                    f"{eps_c[j]:.6e},{rp_c[j]:.6e}\n")
+
+                file_management.save_cycle_plot(
+                    "C-V Butterfly: Cp vs Voltage", "Bias Voltage (V)", "Cp (F)",
+                    all_v, all_cp, "cv_butterfly_cp.png", split_half=True)
+                file_management.save_cycle_plot(
+                    "C-V Butterfly: εr vs Voltage", "Bias Voltage (V)",
+                    "Dielectric constant εr", all_v, all_eps, "cv_butterfly_eps_r.png",
+                    split_half=True)
+                file_management.save_cycle_plot(
+                    "C-V Butterfly: D vs Voltage", "Bias Voltage (V)", "D (loss factor)",
+                    all_v, all_d, "cv_butterfly_d.png", split_half=True)
         return name, run
 
-    elif choice == 7:
-        # Permittivity vs Frequency
-        if (pia.current_parameters["freq_start_hz"] != pia.FREQ_START_HZ
-                or pia.current_parameters["apply_dc_bias"] != pia.APPLY_DC_BIAS):
-            use_last = pia.prompt_for_parameter_duplication()
-        else:
-            use_last = False
-        if use_last:
-            freq_start = pia.current_parameters["freq_start_hz"]
-            freq_stop = pia.current_parameters["freq_stop_hz"]
-            freq_points = pia.current_parameters["num_points"]
-            bias_voltage = pia.current_parameters["dc_bias_v"]
-        else:
-            freq_start = safe_float_input("Enter start frequency (Hz) [default 1000]: ", 1000)
-            freq_stop = safe_float_input("Enter stop frequency (Hz) [default 1e6]: ", 1e6)
-            freq_points = safe_int_input("Enter number of frequency points [default 201]: ", 201)
-            bias_voltage = safe_float_input("Enter DC bias voltage (V) [default 0]: ", 0)
-            pia.current_parameters.update({
-                "freq_start_hz": freq_start, "freq_stop_hz": freq_stop,
-                "num_points": freq_points, "dc_bias_v": bias_voltage,
-                "apply_dc_bias": (bias_voltage != 0)})
-        thickness_nm, area_um2 = _prompt_hzo_geometry_inputs()
-
-        def run():
-            with InstrumentSession(pia.setup, _pia_safe_close) as inst:
-                pia.initialize_4294a_for_cpd(inst)
-                freq_axis, cp_f = pia.measure_eps_vs_freq(
-                    inst, freq_start, freq_stop, freq_points, bias_voltage)
-                eps_f = pia.compute_eps_r(cp_f, thickness_nm, area_um2)
-                file_management.save_csv("eps_vs_freq.csv",
-                    np.column_stack([freq_axis, cp_f, eps_f]),
-                    "frequency_Hz, Cp_F, eps_r")
-                file_management.save_image("Permittivity vs Frequency",
-                    "Frequency (Hz)", freq_axis, "Dielectric constant εr", eps_f,
-                    APPLY_DC_BIAS=(bias_voltage != 0), DC_BIAS_V=bias_voltage)
-        return name, run
-
-    elif choice == 8:
+    elif choice == 4:
         # R-X vs Frequency
         freq_start, freq_stop, num_points, apply_dc_bias, dc_bias_v = _pia_get_params()
 
@@ -655,7 +616,7 @@ def _prepare_pia_cryo(choice):
                     "frequency_Hz, R_ohm, X_ohm")
         return name, run
 
-    elif choice == 9:
+    elif choice == 5:
         # G-B vs Frequency
         freq_start, freq_stop, num_points, apply_dc_bias, dc_bias_v = _pia_get_params()
 
@@ -676,7 +637,7 @@ def _prepare_pia_cryo(choice):
                     "frequency_Hz, G_S, B_S")
         return name, run
 
-    elif choice == 10:
+    elif choice == 6:
         # Y-θ vs Frequency
         freq_start, freq_stop, num_points, apply_dc_bias, dc_bias_v = _pia_get_params()
 
@@ -1359,152 +1320,143 @@ def execute_pia_measurement(choice):
     repeating = True
     while repeating:
         if choice == 1:
-            # Impedance Magnitude vs Frequency
-            print("You selected Impedance Magnitude vs Frequency measurement.")
+            # Impedance (|Z| & Phase) vs Frequency
+            print("Impedance (|Z| & Phase) vs Frequency measurement.")
             freq_start, freq_stop, num_points, apply_dc_bias, dc_bias_v = _pia_get_params()
 
             with InstrumentSession(pia.setup, _pia_safe_close) as inst:
                 pia.initialize_4294a_for_impedance(inst)
                 pia.configure_dc_bias(inst, apply_dc_bias, dc_bias_v)
-                freq_axis, z_mag, theta_deg = pia.measure_impedance_vs_freq(inst, freq_start, freq_stop, num_points)
-
-                file_management.save_image(
-                    "Impedance Magnitude vs Frequency", "Frequency (Hz)", freq_axis, "|Z| (Ohm)", z_mag,
-                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v
-                )
-
+                freq_axis, z_mag, theta_deg = pia.measure_impedance_vs_freq(
+                    inst, freq_start, freq_stop, num_points)
                 z_real = z_mag * np.cos(np.deg2rad(theta_deg))
                 z_imag = z_mag * np.sin(np.deg2rad(theta_deg))
-                csv_data = np.column_stack([freq_axis, z_mag, theta_deg, z_real, z_imag])
                 file_management.save_csv(
-                    "impedance_data.csv", csv_data,
-                    "frequency_Hz, Z_mag_ohm, theta_deg, Z_real_ohm, Z_imag_ohm"
-                )
+                    "impedance_data.csv",
+                    np.column_stack([freq_axis, z_mag, theta_deg, z_real, z_imag]),
+                    "frequency_Hz, Z_mag_ohm, theta_deg, Z_real_ohm, Z_imag_ohm")
+                file_management.save_image("|Z| vs Frequency", "Frequency (Hz)",
+                    freq_axis, "|Z| (Ohm)", z_mag,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
+                file_management.save_image("Phase vs Frequency", "Frequency (Hz)",
+                    freq_axis, "Phase θ (Degrees)", theta_deg,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
+                file_management.save_image("Z_real vs Frequency", "Frequency (Hz)",
+                    freq_axis, "Z_real (Ohm)", z_real,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
+                file_management.save_image("Z_imag vs Frequency", "Frequency (Hz)",
+                    freq_axis, "Z_imag (Ohm)", z_imag,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
+                print("Impedance measurement complete. Data saved to output folder.")
 
         elif choice == 2:
-            # Impedance Phase vs Frequency
-            print("You selected Impedance Phase vs Frequency measurement.")
+            # Dielectrics: CPD frequency sweep only
+            print("Dielectrics measurement (CPD mode — Cp, D, εr, tan loss).")
             freq_start, freq_stop, num_points, apply_dc_bias, dc_bias_v = _pia_get_params()
+            thickness_nm, area_um2 = _prompt_hzo_geometry_inputs()
+
+            EPS0 = 8.854187817e-12
+            t_m = thickness_nm * 1e-9
+            a_m2 = area_um2 * 1e-12
 
             with InstrumentSession(pia.setup, _pia_safe_close) as inst:
-                pia.initialize_4294a_for_impedance(inst)
+                pia.initialize_4294a_for_cpd(inst)
                 pia.configure_dc_bias(inst, apply_dc_bias, dc_bias_v)
-                freq_axis, z_mag, theta_deg = pia.measure_impedance_vs_freq(inst, freq_start, freq_stop, num_points)
 
-                file_management.save_image(
-                    "Impedance Phase vs Frequency", "Frequency (Hz)", freq_axis, "Phase (Degrees)", theta_deg,
-                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v
-                )
+                print("Running CPD frequency sweep...")
+                freq_axis, cp_vals, d_vals = pia.measure_cpd_vs_freq(
+                    inst, freq_start, freq_stop, num_points)
+                eps_r_f = cp_vals * t_m / (EPS0 * a_m2)
+                eps_r_imag_f = eps_r_f * np.abs(d_vals)
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    rp_f = np.where(
+                        (np.abs(cp_vals) > 0) & (np.abs(d_vals) > 0),
+                        1.0 / (2 * np.pi * freq_axis * np.abs(cp_vals) * np.abs(d_vals)),
+                        0.0)
 
-                z_real = z_mag * np.cos(np.deg2rad(theta_deg))
-                z_imag = z_mag * np.sin(np.deg2rad(theta_deg))
-                csv_data = np.column_stack([freq_axis, z_mag, theta_deg, z_real, z_imag])
-                file_management.save_csv(
-                    "impedance_data.csv", csv_data,
-                    "frequency_Hz, Z_mag_ohm, theta_deg, Z_real_ohm, Z_imag_ohm"
-                )
+                output_path = file_management.ensure_output_dir()
+                csv_path = file_management.uniquify(
+                    os.path.join(output_path, "dielectrics_data.csv"))
+                with open(csv_path, "w") as f:
+                    f.write("frequency_Hz,Cp_F,D,eps_r,eps_r_imag,Rp_ohm\n")
+                    for i in range(len(freq_axis)):
+                        f.write(f"{freq_axis[i]:.6e},{cp_vals[i]:.6e},{d_vals[i]:.6e},"
+                                f"{eps_r_f[i]:.6e},{eps_r_imag_f[i]:.6e},{rp_f[i]:.6e}\n")
+                print(f"Data saved to: {csv_path}")
+
+                file_management.save_image("εr vs Frequency", "Frequency (Hz)",
+                    freq_axis, "Dielectric constant εr", eps_r_f,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
+                file_management.save_image("Cp vs Frequency", "Frequency (Hz)",
+                    freq_axis, "Cp (F)", cp_vals,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
+                file_management.save_image("D (Tan Loss) vs Frequency", "Frequency (Hz)",
+                    freq_axis, "D (loss factor)", d_vals,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
+                file_management.save_image("εr″ vs Frequency", "Frequency (Hz)",
+                    freq_axis, "εr″ (imaginary permittivity)", eps_r_imag_f,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
+                print("Dielectrics measurement complete. Data saved to output folder.")
 
         elif choice == 3:
-            # Capacitance vs Frequency
-            print("You selected Capacitance vs Frequency measurement.")
-            freq_start, freq_stop, num_points, apply_dc_bias, dc_bias_v = _pia_get_params()
+            # C-V Butterfly Cycles
+            print("C-V Butterfly Cycles (CPD mode — Cp, D, εr vs DC bias voltage).")
+            thickness_nm, area_um2 = _prompt_hzo_geometry_inputs()
+            freq_cv = safe_float_input("Enter C-V measurement frequency (Hz) [default 25000]: ", 25000)
+            v_min = safe_float_input("Enter C-V minimum voltage (V) [default 0]: ", 0)
+            v_max = safe_float_input("Enter C-V maximum voltage (V) [default 5]: ", 5)
+            n_cv_pts = safe_int_input("Enter number of C-V points per sweep [default 401]: ", 401)
+            n_cycles = safe_int_input("Enter number of C-V cycles [default 1]: ", 1)
+
+            EPS0 = 8.854187817e-12
+            t_m = thickness_nm * 1e-9
+            a_m2 = area_um2 * 1e-12
 
             with InstrumentSession(pia.setup, _pia_safe_close) as inst:
                 pia.initialize_4294a_for_cpd(inst)
-                pia.configure_dc_bias(inst, apply_dc_bias, dc_bias_v)
-                freq_axis, cp_vals, d_vals = pia.measure_cpd_vs_freq(inst, freq_start, freq_stop, num_points)
 
-                file_management.save_image(
-                    "Capacitance vs Frequency", "Frequency (Hz)", freq_axis, "Cp (F)", cp_vals,
-                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v
-                )
+                all_v, all_cp, all_d, all_eps = [], [], [], []
+                for cyc_i in range(n_cycles):
+                    print(f"Running C-V cycle {cyc_i + 1}/{n_cycles}...")
+                    v, cp, d = pia.measure_single_cv_cycle_full(
+                        inst, freq_cv, v_min, v_max, n_cv_pts)
+                    all_v.append(v)
+                    all_cp.append(cp)
+                    all_d.append(d)
+                    all_eps.append(cp * t_m / (EPS0 * a_m2))
 
-                csv_data = np.column_stack([freq_axis, cp_vals, d_vals])
-                file_management.save_csv("cpd_data.csv", csv_data, "frequency_Hz, Cp_F, D")
-                print("Measurement complete. Data saved to output folder.")
-            
+                output_path = file_management.ensure_output_dir()
+                csv_path = file_management.uniquify(
+                    os.path.join(output_path, "cv_butterfly_data.csv"))
+                with open(csv_path, "w") as f:
+                    f.write(f"# C-V Butterfly Cycles (freq={freq_cv:.0f} Hz, {n_cycles} cycle(s))\n")
+                    f.write("cycle,bias_V,Cp_F,D,eps_r,Rp_ohm\n")
+                    for ci in range(n_cycles):
+                        v_c, cp_c, d_c, eps_c = (
+                            all_v[ci], all_cp[ci], all_d[ci], all_eps[ci])
+                        with np.errstate(divide='ignore', invalid='ignore'):
+                            rp_c = np.where(
+                                (np.abs(cp_c) > 0) & (np.abs(d_c) > 0),
+                                1.0 / (2 * np.pi * freq_cv * np.abs(cp_c) * np.abs(d_c)),
+                                0.0)
+                        for j in range(len(v_c)):
+                            f.write(f"{ci + 1},{v_c[j]:.4f},{cp_c[j]:.6e},{d_c[j]:.6e},"
+                                    f"{eps_c[j]:.6e},{rp_c[j]:.6e}\n")
+                print(f"Data saved to: {csv_path}")
+
+                file_management.save_cycle_plot(
+                    "C-V Butterfly: Cp vs Voltage", "Bias Voltage (V)", "Cp (F)",
+                    all_v, all_cp, "cv_butterfly_cp.png", split_half=True)
+                file_management.save_cycle_plot(
+                    "C-V Butterfly: εr vs Voltage", "Bias Voltage (V)",
+                    "Dielectric constant εr", all_v, all_eps, "cv_butterfly_eps_r.png",
+                    split_half=True)
+                file_management.save_cycle_plot(
+                    "C-V Butterfly: D vs Voltage", "Bias Voltage (V)", "D (loss factor)",
+                    all_v, all_d, "cv_butterfly_d.png", split_half=True)
+                print("C-V butterfly measurement complete. Data saved to output folder.")
+
         elif choice == 4:
-            # Tan Loss vs Frequency
-            print("You selected Tan Loss vs Frequency measurement.")
-            freq_start, freq_stop, num_points, apply_dc_bias, dc_bias_v = _pia_get_params()
-
-            with InstrumentSession(pia.setup, _pia_safe_close) as inst:
-                pia.initialize_4294a_for_cpd(inst)
-                pia.configure_dc_bias(inst, apply_dc_bias, dc_bias_v)
-                freq_axis, cp_vals, d_vals = pia.measure_cpd_vs_freq(inst, freq_start, freq_stop, num_points)
-
-                file_management.save_image(
-                    "Tan Loss vs Frequency", "Frequency (Hz)", freq_axis, "D (loss factor)", d_vals,
-                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v
-                )
-
-                csv_data = np.column_stack([freq_axis, cp_vals, d_vals])
-                file_management.save_csv("cpd_data.csv", csv_data, "frequency_Hz, Cp_F, D")
-                print("Measurement complete. Data saved to output folder.")
-            
-        elif choice == 5:
-            # C–V Butterfly Cycle: Cp vs Voltage
-            _pia_cv_butterfly(plot_mode="cp")
-
-        elif choice == 6:
-            # C–V Butterfly Cycle: Permittivity vs Voltage
-            _pia_cv_butterfly(plot_mode="eps")
-
-        elif choice == 7:
-            # εr vs frequency measurement
-            print("Permittivity vs Frequency Measurement")
-
-            try:
-                if (pia.current_parameters["freq_start_hz"] != pia.FREQ_START_HZ
-                        or pia.current_parameters["apply_dc_bias"] != pia.APPLY_DC_BIAS):
-                    use_last_params = pia.prompt_for_parameter_duplication()
-                else:
-                    use_last_params = False
-
-                if use_last_params:
-                    freq_start = pia.current_parameters["freq_start_hz"]
-                    freq_stop = pia.current_parameters["freq_stop_hz"]
-                    freq_points = pia.current_parameters["num_points"]
-                    bias_voltage = pia.current_parameters["dc_bias_v"]
-                else:
-                    freq_start = safe_float_input("Enter start frequency (Hz) [default 1000]: ", 1000)
-                    freq_stop = safe_float_input("Enter stop frequency (Hz) [default 1e6]: ", 1e6)
-                    freq_points = safe_int_input("Enter number of frequency points [default 201]: ", 201)
-                    bias_voltage = safe_float_input("Enter DC bias voltage (V) [default 0]: ", 0)
-
-                    pia.current_parameters["freq_start_hz"] = freq_start
-                    pia.current_parameters["freq_stop_hz"] = freq_stop
-                    pia.current_parameters["num_points"] = freq_points
-                    pia.current_parameters["dc_bias_v"] = bias_voltage
-                    pia.current_parameters["apply_dc_bias"] = (bias_voltage != 0)
-
-                thickness_nm, area_um2 = _prompt_hzo_geometry_inputs()
-
-                with InstrumentSession(pia.setup, _pia_safe_close) as inst:
-                    pia.initialize_4294a_for_cpd(inst)
-
-                    print("Running εr vs frequency sweep...")
-                    freq_axis, cp_f = pia.measure_eps_vs_freq(inst, freq_start, freq_stop, freq_points, bias_voltage)
-                    eps_f = pia.compute_eps_r(cp_f, thickness_nm, area_um2)
-
-                    csv_data = np.column_stack([freq_axis, cp_f, eps_f])
-                    file_management.save_csv(
-                        "eps_vs_freq.csv",
-                        csv_data,
-                        "frequency_Hz, Cp_F, eps_r"
-                    )
-                    
-                    # Save plot
-                    file_management.save_image(
-                        "Permittivity vs Frequency", "Frequency (Hz)", freq_axis, "Dielectric constant εr", eps_f,
-                        APPLY_DC_BIAS=(bias_voltage != 0), DC_BIAS_V=bias_voltage
-                    )
-                    print("Frequency sweep complete. Data and plot saved to output folder.")
-            except Exception as e:
-                log.error("PIA εr vs frequency measurement failed: %s", e)
-                print(f"Error during measurement: {e}")
-
-        elif choice == 8:
             # R-X vs Frequency
             print("R-X (Resistance-Reactance) vs Frequency")
             freq_start, freq_stop, num_points, apply_dc_bias, dc_bias_v = _pia_get_params()
@@ -1512,22 +1464,20 @@ def execute_pia_measurement(choice):
             with InstrumentSession(pia.setup, _pia_safe_close) as inst:
                 pia.initialize_4294a_for_rx(inst)
                 pia.configure_dc_bias(inst, apply_dc_bias, dc_bias_v)
-                freq_axis, r_vals, x_vals = pia.measure_rx_vs_freq(inst, freq_start, freq_stop, num_points)
-
-                file_management.save_image(
-                    "Resistance vs Frequency", "Frequency (Hz)", freq_axis, "R (Ohm)", r_vals,
-                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v
-                )
-                file_management.save_image(
-                    "Reactance vs Frequency", "Frequency (Hz)", freq_axis, "X (Ohm)", x_vals,
-                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v
-                )
-
-                csv_data = np.column_stack([freq_axis, r_vals, x_vals])
-                file_management.save_csv("rx_data.csv", csv_data, "frequency_Hz, R_ohm, X_ohm")
+                freq_axis, r_vals, x_vals = pia.measure_rx_vs_freq(
+                    inst, freq_start, freq_stop, num_points)
+                file_management.save_image("Resistance vs Frequency", "Frequency (Hz)",
+                    freq_axis, "R (Ohm)", r_vals,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
+                file_management.save_image("Reactance vs Frequency", "Frequency (Hz)",
+                    freq_axis, "X (Ohm)", x_vals,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
+                file_management.save_csv("rx_data.csv",
+                    np.column_stack([freq_axis, r_vals, x_vals]),
+                    "frequency_Hz, R_ohm, X_ohm")
                 print("R-X measurement complete. Data saved to output folder.")
 
-        elif choice == 9:
+        elif choice == 5:
             # G-B vs Frequency
             print("G-B (Conductance-Susceptance) vs Frequency")
             freq_start, freq_stop, num_points, apply_dc_bias, dc_bias_v = _pia_get_params()
@@ -1535,22 +1485,20 @@ def execute_pia_measurement(choice):
             with InstrumentSession(pia.setup, _pia_safe_close) as inst:
                 pia.initialize_4294a_for_gb(inst)
                 pia.configure_dc_bias(inst, apply_dc_bias, dc_bias_v)
-                freq_axis, g_vals, b_vals = pia.measure_gb_vs_freq(inst, freq_start, freq_stop, num_points)
-
-                file_management.save_image(
-                    "Conductance vs Frequency", "Frequency (Hz)", freq_axis, "G (S)", g_vals,
-                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v
-                )
-                file_management.save_image(
-                    "Susceptance vs Frequency", "Frequency (Hz)", freq_axis, "B (S)", b_vals,
-                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v
-                )
-
-                csv_data = np.column_stack([freq_axis, g_vals, b_vals])
-                file_management.save_csv("gb_data.csv", csv_data, "frequency_Hz, G_S, B_S")
+                freq_axis, g_vals, b_vals = pia.measure_gb_vs_freq(
+                    inst, freq_start, freq_stop, num_points)
+                file_management.save_image("Conductance vs Frequency", "Frequency (Hz)",
+                    freq_axis, "G (S)", g_vals,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
+                file_management.save_image("Susceptance vs Frequency", "Frequency (Hz)",
+                    freq_axis, "B (S)", b_vals,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
+                file_management.save_csv("gb_data.csv",
+                    np.column_stack([freq_axis, g_vals, b_vals]),
+                    "frequency_Hz, G_S, B_S")
                 print("G-B measurement complete. Data saved to output folder.")
 
-        elif choice == 10:
+        elif choice == 6:
             # Y-θ vs Frequency
             print("Y-θ (Admittance) vs Frequency")
             freq_start, freq_stop, num_points, apply_dc_bias, dc_bias_v = _pia_get_params()
@@ -1558,19 +1506,17 @@ def execute_pia_measurement(choice):
             with InstrumentSession(pia.setup, _pia_safe_close) as inst:
                 pia.initialize_4294a_for_ytd(inst)
                 pia.configure_dc_bias(inst, apply_dc_bias, dc_bias_v)
-                freq_axis, y_mag, y_theta = pia.measure_ytd_vs_freq(inst, freq_start, freq_stop, num_points)
-
-                file_management.save_image(
-                    "Admittance Magnitude vs Frequency", "Frequency (Hz)", freq_axis, "|Y| (S)", y_mag,
-                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v
-                )
-                file_management.save_image(
-                    "Admittance Phase vs Frequency", "Frequency (Hz)", freq_axis, "θ (Degrees)", y_theta,
-                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v
-                )
-
-                csv_data = np.column_stack([freq_axis, y_mag, y_theta])
-                file_management.save_csv("ytd_data.csv", csv_data, "frequency_Hz, Y_mag_S, theta_deg")
+                freq_axis, y_mag, y_theta = pia.measure_ytd_vs_freq(
+                    inst, freq_start, freq_stop, num_points)
+                file_management.save_image("Admittance Magnitude vs Frequency", "Frequency (Hz)",
+                    freq_axis, "|Y| (S)", y_mag,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
+                file_management.save_image("Admittance Phase vs Frequency", "Frequency (Hz)",
+                    freq_axis, "θ (Degrees)", y_theta,
+                    APPLY_DC_BIAS=apply_dc_bias, DC_BIAS_V=dc_bias_v)
+                file_management.save_csv("ytd_data.csv",
+                    np.column_stack([freq_axis, y_mag, y_theta]),
+                    "frequency_Hz, Y_mag_S, theta_deg")
                 print("Y-θ measurement complete. Data saved to output folder.")
 
         repeat_input = input("\nDo you want to perform another measurement? (y/n): ").strip().lower()

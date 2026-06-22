@@ -1,7 +1,7 @@
 """
 Filename: measurements_config.py
 Author: Ethan Ruddell
-Date: 2026-02-13
+Date: 2026-5-11
 Description: Central catalogue of every measurement the software can perform.
 
 This file is the SINGLE SOURCE OF TRUTH for:
@@ -17,6 +17,14 @@ When you add a new measurement to an instrument driver you should:
      the required parameters.
   3. Implement the actual measurement logic in the driver module
      and the GUI/CLI execution logic.
+
+Parameter tuple formats
+-----------------------
+Regular text field (3-element tuple):
+    (display_label, dict_key, default_value)
+
+Multi-select checkbox field (4-element tuple, 3rd element is a list):
+    (display_label, dict_key, [(key, display_label), ...], [default_keys])
 """
 
 # =============================
@@ -25,15 +33,22 @@ When you add a new measurement to an instrument driver you should:
 # Each list below enumerates the measurements available for one instrument.
 # The order matters: index 1 in the list corresponds to choice 1 in the menu.
 # Names should be short and descriptive so they fit nicely in the GUI listbox.
+#
+# PIA note: the Agilent 4294A always measures TWO parameters simultaneously
+# in a single sweep (Trace A and Trace B).  Menu items that previously ran the
+# same physical sweep twice just to plot different traces have been merged:
+#
+#   Old 1 + 2  (both Z-θ sweeps)        → 1: Impedance (|Z| & Phase)
+#   Old 3-6    (CPD freq sweep)          → 2: Dielectrics
+#   Old 7      (CPD C-V butterfly)       → 3: C-V Butterfly Cycles
+#   Old 8      R-X                       → 4
+#   Old 9      G-B                       → 5
+#   Old 10     Y-θ                       → 6
 
 PIA_MEASUREMENTS = [
-    "Impedance Magnitude vs Frequency",
-    "Impedance Phase vs Frequency",
-    "Capacitance vs Frequency",
-    "Tan Loss vs Frequency",
-    "C-V Butterfly Cycles: Cp vs Voltage",
-    "C-V Butterfly Cycles: Permittivity vs Voltage",
-    "Permittivity vs Frequency",
+    "Impedance (|Z| & Phase) vs Frequency",
+    "Dielectrics",
+    "C-V Butterfly Cycles",
     "R-X (Resistance-Reactance) vs Frequency",
     "G-B (Conductance-Susceptance) vs Frequency",
     "Y-θ (Admittance) vs Frequency",
@@ -75,26 +90,48 @@ LCR_MEASUREMENTS = [
 # =============================
 # This dictionary tells the GUI which input fields to show for each
 # measurement.  The key is a tuple (instrument_name, measurement_index)
-# and the value is a list of (display_label, dict_key, default_value)
-# tuples.  When the user selects a measurement, the GUI reads this
-# dictionary and dynamically creates text entry boxes for every parameter.
-#
-# Maps (instrument, measurement_idx) to [(label, key, default_value), ...]
+# and the value is a list of parameter tuples (see module docstring for formats).
 
 PIA_OSCILLATOR_FIELD = ("Oscillation Voltage (V)", "osc_voltage_v", "0.5")
 PIA_IMPEDANCE_OSCILLATOR_FIELD = ("Impedance Oscillation Voltage (V)", "osc_voltage_v", "0.1")
 
 MEASUREMENT_HELP = {
-    ("PIA", 1): "Measures impedance magnitude and phase versus frequency to show the device's impedance response.",
-    ("PIA", 2): "Measures impedance phase versus frequency; useful for seeing whether the device behaves more capacitively or inductively.",
-    ("PIA", 3): "Measures capacitance and dissipation factor versus frequency to show capacitance dispersion and loss.",
-    ("PIA", 4): "Measures tan loss versus frequency, highlighting dielectric loss behavior as the frequency changes.",
-    ("PIA", 5): "Runs a C-V butterfly sweep using capacitance. The up/down bias sweep reveals hysteresis and dielectric response.",
-    ("PIA", 6): "Runs a C-V butterfly sweep but converts capacitance to relative permittivity so the dielectric response is easier to compare.",
-    ("PIA", 7): "Measures relative permittivity versus frequency at a fixed DC bias to show dielectric dispersion.",
-    ("PIA", 8): "Measures resistance and reactance versus frequency to separate resistive and reactive behavior.",
-    ("PIA", 9): "Measures conductance and susceptance versus frequency to show leakage and reactive admittance components.",
-    ("PIA", 10): "Measures admittance magnitude and phase versus frequency as another view of the device's AC response.",
+    # ------------------------------------------------------------------
+    # PIA measurements
+    # ------------------------------------------------------------------
+    ("PIA", 1): (
+        "Impedance sweep — measures |Z| (magnitude) and θ (phase angle) simultaneously "
+        "in a single Z-θ sweep. Both are always saved to the CSV; use the checkboxes to "
+        "choose which graphs to display. Z_real and Z_imag are derived from |Z| and θ."
+    ),
+    ("PIA", 2): (
+        "Dielectric frequency characterization using CPD mode. The Agilent 4294A "
+        "measures Cp (parallel capacitance) and D (dissipation factor / tan δ) "
+        "SIMULTANEOUSLY in a single frequency sweep.\n\n"
+        "Saves Cp(f), D(f), εr(f), εr″(f), and Rp(f) to CSV.\n"
+        "Select which graphs to display with the checkboxes."
+    ),
+    ("PIA", 3): (
+        "C-V butterfly measurement using CPD mode. The DC bias is swept "
+        "V_min→V_max→V_min at a fixed AC frequency for the requested number of cycles. "
+        "Cp(V), D(V), and εr(V) are recorded for each cycle, revealing ferroelectric "
+        "hysteresis and polarization switching in HZO FeCAPs."
+    ),
+    ("PIA", 4): (
+        "R-X sweep — measures resistance R and reactance X simultaneously in a single "
+        "RX-mode sweep. Both are saved to the CSV and plotted."
+    ),
+    ("PIA", 5): (
+        "G-B sweep — measures conductance G and susceptance B simultaneously in a single "
+        "GB-mode sweep. Both are saved to the CSV and plotted."
+    ),
+    ("PIA", 6): (
+        "Admittance sweep — measures admittance magnitude |Y| and phase θ simultaneously "
+        "in a single YTD-mode sweep. Both are saved to the CSV and plotted."
+    ),
+    # ------------------------------------------------------------------
+    # PSPA measurements
+    # ------------------------------------------------------------------
     ("PSPA", 1): "Sweeps drain voltage at several gate voltages to produce transistor output characteristics.",
     ("PSPA", 2): "Sweeps gate voltage at a constant drain voltage to show transfer characteristics; choose Linear, Log, or Both using the 'Measurement Scale' option.",
     ("PSPA", 3): "Measures a unidirectional I-V curve over the requested voltage range.",
@@ -106,6 +143,9 @@ MEASUREMENT_HELP = {
     ("PSPA", 9): "Sweeps voltage until the current reaches the breakdown threshold.",
     ("PSPA", 10): "Measures resistance by forcing current and reading the resulting voltage drop.",
     ("PSPA", 11): "Keithley sourcemeter transfer measurement with user-selected drain and source SMU channels and both linear and logarithmic plots.",
+    # ------------------------------------------------------------------
+    # LCR measurements
+    # ------------------------------------------------------------------
     ("LCR", 1): "Measures impedance magnitude and phase versus frequency with the LCR meter.",
     ("LCR", 2): "Measures capacitance and dissipation factor versus frequency with the LCR meter.",
     ("LCR", 3): "Measures inductance and quality factor versus frequency with the LCR meter.",
@@ -126,15 +166,15 @@ PARAM_HELP_OVERRIDES = {
     "sweep_type": "Chooses linear or logarithmic spacing between sweep points.",
     "dc_bias_v": "Constant DC voltage applied during the measurement. Bias can change the measured response.",
     "osc_voltage_v": "AC test-signal amplitude for the PIA. Higher values usually strengthen the signal; lower values are gentler on the device.",
-    "freq_cv": "Fixed frequency used during the C-V butterfly measurement.",
+    "freq_cv": "Fixed AC frequency used during the C-V butterfly measurement.",
     "freq": "Measurement frequency used for a single-point or fixed-frequency sweep.",
     "v_min": "Starting voltage for the bias sweep.",
     "v_max": "Ending voltage for the bias sweep.",
     "v_step": "Voltage increment between sweep points.",
-    "n_points": "Number of points in each sweep direction.",
-    "n_cycles": "Number of complete up/down cycles to repeat.",
-    "thickness_nm": "Dielectric film thickness used when converting capacitance to permittivity.",
-    "area_um2": "Electrode area used when converting capacitance to permittivity.",
+    "n_points": "Number of points in each C-V sweep direction.",
+    "n_cycles": "Number of complete up/down C-V cycles to repeat.",
+    "thickness_nm": "Dielectric film thickness used when converting capacitance to permittivity. Set to 0 to skip permittivity calculations.",
+    "area_um2": "Electrode area used when converting capacitance to permittivity. Set to 0 to skip permittivity calculations.",
     "ac_level": "AC stimulus amplitude for the LCR meter. Larger values can improve signal strength, but may disturb sensitive devices.",
     "vds_start": "Starting drain-source voltage.",
     "vds_stop": "Ending drain-source voltage.",
@@ -164,6 +204,10 @@ PARAM_HELP_OVERRIDES = {
     "pulse_width_us": "Duration of each pulse in microseconds.",
     "pulse_period_ms": "Time between pulses in milliseconds.",
     "num_pulses": "Number of pulses to apply.",
+    "display_graphs": (
+        "Select which graphs to generate and display. All collected data is always "
+        "saved to the CSV file regardless of this selection."
+    ),
 }
 
 
@@ -196,72 +240,91 @@ def get_parameter_help(key: str, label: str = "") -> str:
         return "Dielectric thickness used in the permittivity calculation."
     return "Hover help for this parameter."
 
+# ---------------------------------------------------------------------------
+# Multi-select graph options
+# ---------------------------------------------------------------------------
+_PIA_IMPEDANCE_GRAPHS = [
+    ("z_mag",   "|Z| (Impedance Magnitude) vs Frequency"),
+    ("z_phase", "Phase (θ) vs Frequency"),
+    ("z_real",  "Z_real (Resistance) vs Frequency"),
+    ("z_imag",  "Z_imag (Reactance) vs Frequency"),
+]
+_PIA_IMPEDANCE_GRAPH_DEFAULTS = ["z_mag", "z_phase"]
+
+_PIA_DIELECTRICS_GRAPHS = [
+    ("eps_vs_freq",      "εr (Permittivity) vs Frequency"),
+    ("cp_vs_freq",       "Cp (Capacitance) vs Frequency"),
+    ("d_vs_freq",        "D (Tan Loss) vs Frequency"),
+    ("eps_imag_vs_freq", "εr″ (Imaginary Permittivity) vs Frequency"),
+]
+_PIA_DIELECTRICS_GRAPH_DEFAULTS = ["eps_vs_freq", "d_vs_freq"]
+
+_PIA_CV_BUTTERFLY_GRAPHS = [
+    ("cv_butterfly_cp",  "C-V Butterfly: Cp vs Voltage"),
+    ("cv_butterfly_eps", "C-V Butterfly: εr vs Voltage"),
+    ("cv_butterfly_d",   "C-V Butterfly: D vs Voltage"),
+]
+_PIA_CV_BUTTERFLY_GRAPH_DEFAULTS = ["cv_butterfly_cp", "cv_butterfly_eps"]
+
+_PIA_FREQ_FIELDS = [
+    ("Start Frequency (Hz)", "freq_start", "1000"),
+    ("Stop Frequency (Hz)",  "freq_stop",  "1000000"),
+    ("Number of Points",     "num_points", "201"),
+    ("DC Bias (V)",          "dc_bias_v",  "0"),
+]
+
 MEASUREMENT_PARAMS = {
-    # PIA measurements always expose the oscillator level because it controls
-    # the AC test-signal amplitude used by the analyzer.
-    ("PIA", 1): [("Start Frequency (Hz)", "freq_start", "1000"),
-                  ("Stop Frequency (Hz)", "freq_stop", "1000000"),
-                  ("Number of Points", "num_points", "201"),
-                  ("DC Bias (V)", "dc_bias_v", "0"),
-                  PIA_OSCILLATOR_FIELD],
-    ("PIA", 2): [("Start Frequency (Hz)", "freq_start", "1000"),
-                  ("Stop Frequency (Hz)", "freq_stop", "1000000"),
-                  ("Number of Points", "num_points", "201"),
-                  ("DC Bias (V)", "dc_bias_v", "0"),
-                  PIA_IMPEDANCE_OSCILLATOR_FIELD],
-    ("PIA", 3): [("Start Frequency (Hz)", "freq_start", "1000"),
-                  ("Stop Frequency (Hz)", "freq_stop", "1000000"),
-                  ("Number of Points", "num_points", "201"),
-                  ("DC Bias (V)", "dc_bias_v", "0"),
-                  PIA_OSCILLATOR_FIELD],
-    ("PIA", 4): [("Start Frequency (Hz)", "freq_start", "1000"),
-                  ("Stop Frequency (Hz)", "freq_stop", "1000000"),
-                  ("Number of Points", "num_points", "201"),
-                  ("DC Bias (V)", "dc_bias_v", "0"),
-                  PIA_OSCILLATOR_FIELD],
-    # PIA C-V Butterfly (5-6)
-    ("PIA", 5): [("Measurement Frequency (Hz)", "freq_cv", "25000"),
-                  ("Min Voltage (V)", "v_min", "0"),
-                  ("Max Voltage (V)", "v_max", "5"),
-                  ("Points per Sweep", "n_points", "401"),
-                  ("Number of Cycles", "n_cycles", "1"),
-                  ("HZO Thickness (nm)", "thickness_nm", "10.0"),
-                  ("Electrode Area (µm²)", "area_um2", "4418"),
-                  PIA_OSCILLATOR_FIELD],
-    ("PIA", 6): [("Measurement Frequency (Hz)", "freq_cv", "25000"),
-                  ("Min Voltage (V)", "v_min", "0"),
-                  ("Max Voltage (V)", "v_max", "5"),
-                  ("Points per Sweep", "n_points", "401"),
-                  ("Number of Cycles", "n_cycles", "1"),
-                  ("HZO Thickness (nm)", "thickness_nm", "10.0"),
-                  ("Electrode Area (µm²)", "area_um2", "4418"),
-                  PIA_OSCILLATOR_FIELD],
-    # PIA Permittivity vs Frequency (7)
-    ("PIA", 7): [("Start Frequency (Hz)", "freq_start", "1000"),
-                  ("Stop Frequency (Hz)", "freq_stop", "1000000"),
-                  ("Number of Points", "num_points", "201"),
-                  ("DC Bias (V)", "dc_bias_v", "0"),
-                  ("HZO Thickness (nm)", "thickness_nm", "10.0"),
-                  ("Electrode Area (µm²)", "area_um2", "4418"),
-                  PIA_OSCILLATOR_FIELD],
-    # PIA additional frequency sweeps (8-10)
-    ("PIA", 8): [("Start Frequency (Hz)", "freq_start", "1000"),
-                  ("Stop Frequency (Hz)", "freq_stop", "1000000"),
-                  ("Number of Points", "num_points", "201"),
-                  ("DC Bias (V)", "dc_bias_v", "0"),
-                  PIA_OSCILLATOR_FIELD],
-    ("PIA", 9): [("Start Frequency (Hz)", "freq_start", "1000"),
-                  ("Stop Frequency (Hz)", "freq_stop", "1000000"),
-                  ("Number of Points", "num_points", "201"),
-                  ("DC Bias (V)", "dc_bias_v", "0"),
-                  PIA_OSCILLATOR_FIELD],
-    ("PIA", 10): [("Start Frequency (Hz)", "freq_start", "1000"),
-                   ("Stop Frequency (Hz)", "freq_stop", "1000000"),
-                   ("Number of Points", "num_points", "201"),
-                   ("DC Bias (V)", "dc_bias_v", "0"),
-                   PIA_OSCILLATOR_FIELD],
-    
-    # PSPA Measurements
+    # ------------------------------------------------------------------
+    # PIA 1: Impedance — |Z| & θ measured simultaneously (Z-θ mode)
+    # ------------------------------------------------------------------
+    ("PIA", 1): [
+        *_PIA_FREQ_FIELDS,
+        PIA_IMPEDANCE_OSCILLATOR_FIELD,
+        ("Graphs to Display", "display_graphs",
+         _PIA_IMPEDANCE_GRAPHS, _PIA_IMPEDANCE_GRAPH_DEFAULTS),
+    ],
+
+    # ------------------------------------------------------------------
+    # PIA 2: Dielectrics — CPD frequency sweep only
+    # ------------------------------------------------------------------
+    ("PIA", 2): [
+        ("Start Frequency (Hz)",         "freq_start",   "1000"),
+        ("Stop Frequency (Hz)",          "freq_stop",    "1000000"),
+        ("Number of Points (freq sweep)","num_points",   "201"),
+        ("DC Bias During Freq Sweep (V)","dc_bias_v",    "0"),
+        ("Dielectric Thickness (nm)",    "thickness_nm", "10.0"),
+        ("Electrode Area (µm²)",         "area_um2",     "4418"),
+        PIA_OSCILLATOR_FIELD,
+        ("Graphs to Display", "display_graphs",
+         _PIA_DIELECTRICS_GRAPHS, _PIA_DIELECTRICS_GRAPH_DEFAULTS),
+    ],
+
+    # ------------------------------------------------------------------
+    # PIA 3: C-V Butterfly Cycles
+    # ------------------------------------------------------------------
+    ("PIA", 3): [
+        ("C-V Measurement Frequency (Hz)","freq_cv",     "25000"),
+        ("C-V Min Voltage (V)",           "v_min",        "0"),
+        ("C-V Max Voltage (V)",           "v_max",        "5"),
+        ("C-V Points per Sweep",          "n_points",     "401"),
+        ("Number of C-V Cycles",          "n_cycles",     "1"),
+        ("Dielectric Thickness (nm)",     "thickness_nm", "10.0"),
+        ("Electrode Area (µm²)",          "area_um2",     "4418"),
+        PIA_OSCILLATOR_FIELD,
+        ("Graphs to Display", "display_graphs",
+         _PIA_CV_BUTTERFLY_GRAPHS, _PIA_CV_BUTTERFLY_GRAPH_DEFAULTS),
+    ],
+
+    # ------------------------------------------------------------------
+    # PIA 4-6: R-X, G-B, Y-θ
+    # ------------------------------------------------------------------
+    ("PIA", 4): [*_PIA_FREQ_FIELDS, PIA_OSCILLATOR_FIELD],
+    ("PIA", 5): [*_PIA_FREQ_FIELDS, PIA_OSCILLATOR_FIELD],
+    ("PIA", 6): [*_PIA_FREQ_FIELDS, PIA_OSCILLATOR_FIELD],
+
+    # ------------------------------------------------------------------
+    # PSPA Measurements (unchanged)
+    # ------------------------------------------------------------------
     ("PSPA", 1): [("Start Vds (V)", "vds_start", "0"),
                    ("Stop Vds (V)", "vds_stop", "5"),
                    ("Vds Step (V)", "vds_step", "0.1"),
@@ -349,8 +412,10 @@ MEASUREMENT_PARAMS = {
                     ("Measurement Scale (Linear/Log/Both)", "plot_scale", "Both"),
                     ("Drain SMU Channel", "drain_ch", "1"),
                     ("Source SMU Channel", "source_ch", "2")],
-    
-    # LCR Measurements
+
+    # ------------------------------------------------------------------
+    # LCR Measurements (unchanged)
+    # ------------------------------------------------------------------
     ("LCR", 1): [("Start Frequency (Hz)", "freq_start", "20"),
                   ("Stop Frequency (Hz)", "freq_stop", "2000000"),
                   ("Number of Points", "num_points", "201"),
@@ -414,17 +479,9 @@ MEASUREMENT_PARAMS = {
 # =============================
 # Helper Functions
 # =============================
-# Convenience functions so the rest of the code doesn't have to know the
-# internal structure of the lists above.
 
-# Get measurement name by instrument and index
 def get_measurement_name(instrument: str, idx: int) -> str:
-    """Return the human-readable name of a measurement.
-
-    Args:
-        instrument: "PIA", "PSPA", or "LCR"
-        idx:        1-indexed measurement number (matches the menu / listbox)
-    """
+    """Return the human-readable name of a measurement."""
     if instrument == "PIA":
         return PIA_MEASUREMENTS[idx - 1] if 1 <= idx <= len(PIA_MEASUREMENTS) else ""
     elif instrument == "PSPA":

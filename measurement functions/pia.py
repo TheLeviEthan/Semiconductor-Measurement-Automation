@@ -429,9 +429,6 @@ def set_frequency(inst, freq_hz):
     """Set CW frequency used during DC bias sweep."""
     inst.write(f"CWFREQ {freq_hz}")
 
-
-
-
 def compute_eps_r(cp_array, thickness_nm, area_um2):
     """
     Compute dielectric constant εr from Cp:
@@ -464,14 +461,15 @@ def measure_single_cv_cycle(inst, freq_hz, v_min, v_max, n_points):
     single_sweep_and_wait(inst)
     inst.write("TRAC A")
     inst.write("AUTO")
-    v_up = np.linspace(v_min, v_max, n_points)
+    v_up = read_sweep_axis(inst)
     cp_up = read_trace_main(inst, trace="A")
 
-    # Sweep DOWN: v_max → v_min
-    set_dc_bias_sweep(inst, v_max, v_min, n_points, direction="DOWN")
+    # Sweep DOWN: keep the same voltage range and reverse the sweep direction.
+    set_dc_bias_sweep(inst, v_min, v_max, n_points, direction="DOWN")
+    single_sweep_and_wait(inst)
     inst.write("TRAC A")
     inst.write("AUTO")
-    v_down = np.linspace(v_max, v_min, n_points)
+    v_down = read_sweep_axis(inst)
     cp_down = read_trace_main(inst, trace="A")
 
     # Combine into a single "butterfly" trace in actual sweep order
@@ -479,6 +477,47 @@ def measure_single_cv_cycle(inst, freq_hz, v_min, v_max, n_points):
     cp_full = np.concatenate([cp_up, cp_down])
 
     return v_full, cp_full
+
+
+def measure_single_cv_cycle_full(inst, freq_hz, v_min, v_max, n_points):
+    """
+    Measure ONE C-V butterfly loop and return Cp AND D (dissipation) traces.
+
+    Both traces A (Cp) and B (D) are read after each half-sweep before starting
+    the next sweep, so both values come from the same physical measurement pass.
+
+    Returns:
+        tuple: (v_full, cp_full, d_full)
+            v_full  – concatenated bias voltage array (up then down)
+            cp_full – parallel capacitance in Farads
+            d_full  – dissipation factor (tan δ / loss tangent)
+    """
+    set_frequency(inst, freq_hz)
+    inst.write("DCO ON")
+
+    # Sweep UP: v_min → v_max
+    set_dc_bias_sweep(inst, v_min, v_max, n_points, direction="UP")
+    single_sweep_and_wait(inst)
+    inst.write("TRAC A")
+    inst.write("AUTO")
+    v_up = read_sweep_axis(inst)
+    cp_up = read_trace_main(inst, trace="A")
+    d_up = read_trace_main(inst, trace="B")   # read D before starting down sweep
+
+    # Sweep DOWN: keep the same voltage range and reverse the sweep direction.
+    set_dc_bias_sweep(inst, v_min, v_max, n_points, direction="DOWN")
+    single_sweep_and_wait(inst)
+    inst.write("TRAC A")
+    inst.write("AUTO")
+    v_down = read_sweep_axis(inst)
+    cp_down = read_trace_main(inst, trace="A")
+    d_down = read_trace_main(inst, trace="B")  # read D from down sweep
+
+    v_full = np.concatenate([v_up, v_down])
+    cp_full = np.concatenate([cp_up, cp_down])
+    d_full = np.concatenate([d_up, d_down])
+
+    return v_full, cp_full, d_full
 
 
 def measure_eps_vs_freq(inst, freq_start, freq_stop, freq_points, bias_voltage=0.0):

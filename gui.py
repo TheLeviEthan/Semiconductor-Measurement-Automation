@@ -124,6 +124,34 @@ def _suppress_console_output():
             yield
 
 
+class _MultiSelectParam:
+    """Checkbox group widget for selecting multiple graph types.
+
+    Exposes a .get() method that returns a comma-separated string of the
+    selected keys, making it a drop-in replacement for tk.Entry inside
+    the param_entries dict used by get_params_dict().
+    """
+
+    def __init__(self, parent, options, defaults):
+        """
+        Args:
+            parent:   tkinter parent widget to pack checkboxes into.
+            options:  list of (key, display_label) tuples.
+            defaults: list of keys that should be pre-checked.
+        """
+        default_set = set(defaults or [])
+        self._vars = {}
+        for key, label in options:
+            var = tk.BooleanVar(value=(key in default_set))
+            cb = ttk.Checkbutton(parent, text=label, variable=var)
+            cb.pack(anchor="w", pady=1)
+            self._vars[key] = var
+
+    def get(self):
+        """Return comma-separated string of currently selected keys."""
+        return ",".join(k for k, v in self._vars.items() if v.get())
+
+
 class MeasurementGUI:
     """
     Main GUI class for semiconductor measurement automation.
@@ -898,12 +926,16 @@ class MeasurementGUI:
 
         # Add parameter fields
         if not params:
-            label = ttk.Label(self.params_frame, text="(No parameters for this measurement)", 
+            label = ttk.Label(self.params_frame, text="(No parameters for this measurement)",
                             font=("Arial", 9, "italic"), foreground="gray")
             label.grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=5)
         else:
-            for label_text, key, default in params:
-                self.add_param_field(label_text, key, default)
+            for param in params:
+                # Multi-select format: (label, key, [(key, display)...], [defaults])
+                if len(param) == 4 and isinstance(param[2], list):
+                    self.add_multiselect_param_field(param[0], param[1], param[2], param[3])
+                else:
+                    self.add_param_field(param[0], param[1], param[2])
 
     def add_param_field(self, label, key, default=""):
         """Add a single parameter input field."""
@@ -949,6 +981,26 @@ class MeasurementGUI:
 
         self.param_entries[key] = entry
         self.param_entries_list.append(entry)
+
+    def add_multiselect_param_field(self, label, key, options, defaults):
+        """Add a multi-select checkbox group for choosing which graphs to display."""
+        row = len(self.param_entries)
+
+        label_frame = ttk.Frame(self.params_frame)
+        label_frame.grid(row=row, column=0, sticky=(tk.W, tk.N), pady=(6, 2))
+        ttk.Label(label_frame, text=label, font=("Arial", 9, "bold")).grid(
+            row=0, column=0, sticky=tk.W)
+        help_icon = self._create_help_icon(
+            label_frame, get_parameter_help(key, label))
+        help_icon.grid(row=0, column=1, sticky=tk.W, padx=(5, 0))
+
+        cb_frame = ttk.Frame(self.params_frame)
+        cb_frame.grid(row=row, column=1, columnspan=2,
+                      sticky=(tk.W, tk.E), pady=(6, 2))
+
+        widget = _MultiSelectParam(cb_frame, options, defaults)
+        self.param_entries[key] = widget
+        # Checkboxes do not participate in Tab traversal
 
     def update_measurement_list(self):
         """Update measurement options based on selected instrument."""
