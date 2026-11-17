@@ -203,6 +203,12 @@ class MeasurementGUI:
         self._tooltips = []
         self.measurement_choice_var = tk.IntVar(value=1)
         self.measurement_rows = []
+        # Preserve parameter values and measurement selections as the user
+        # moves between instruments and back.
+        self._active_instrument = "PIA"
+        self._current_param_context = None
+        self._instrument_measurement_choices = {}
+        self._instrument_parameter_values = {}
         
         self.create_widgets()
         self.toggle_cryo_params()  # Hide cryo UI initially
@@ -759,6 +765,17 @@ class MeasurementGUI:
 
     def on_instrument_changed(self):
         """Refresh measurements and auto-route switchbox when instrument changes."""
+        previous_instrument = getattr(self, "_active_instrument", self.instrument_var.get())
+        self._save_current_parameter_values()
+        try:
+            previous_choice = int(self.measurement_choice_var.get())
+            if previous_choice > 0:
+                self._instrument_measurement_choices[previous_instrument] = previous_choice
+        except (tk.TclError, TypeError, ValueError):
+            pass
+
+        instrument = self.instrument_var.get()
+        self._active_instrument = instrument
         self.update_measurement_list()
         self.switch_now_from_selection(raise_on_error=False)
 
@@ -901,8 +918,25 @@ class MeasurementGUI:
         """Backward-compatible alias for reverse measurement selection tab handling."""
         return self._on_measurement_shift_tab_pressed(event)
 
+    def _save_current_parameter_values(self):
+        """Store values from the currently displayed parameter fields."""
+        context = getattr(self, "_current_param_context", None)
+        entries = getattr(self, "param_entries", None)
+        if context is None or not entries:
+            return
+
+        saved_values = {}
+        for key, widget in entries.items():
+            try:
+                saved_values[key] = widget.get()
+            except Exception:
+                continue
+        self._instrument_parameter_values[context] = saved_values
+
     def populate_default_params(self):
         """Populate parameter frame with default parameters based on selected measurement."""
+        self._save_current_parameter_values()
+
         # Clear existing parameters
         for widget in self.params_frame.winfo_children():
             widget.destroy()
@@ -915,6 +949,7 @@ class MeasurementGUI:
             measurement_idx = int(self.measurement_choice_var.get())
             if measurement_idx <= 0:
                 return
+            self._instrument_measurement_choices[instrument] = measurement_idx
             if self._is_delay_selection(instrument, measurement_idx):
                 params = [("Delay Time (s)", self.QUEUE_DELAY_KEY, "0")]
             else:
@@ -923,6 +958,12 @@ class MeasurementGUI:
                 params = self.MEASUREMENT_PARAMS.get((instrument, measurement_idx), [])
         except (tk.TclError, IndexError):
             params = []
+
+        self._active_instrument = instrument
+        self._current_param_context = (instrument, measurement_idx)
+        saved_values = self._instrument_parameter_values.get(
+            (instrument, measurement_idx), {}
+        )
 
         # Add parameter fields
         if not params:
@@ -933,9 +974,16 @@ class MeasurementGUI:
             for param in params:
                 # Multi-select format: (label, key, [(key, display)...], [defaults])
                 if len(param) == 4 and isinstance(param[2], list):
-                    self.add_multiselect_param_field(param[0], param[1], param[2], param[3])
+                    defaults = param[3]
+                    if param[1] in saved_values:
+                        defaults = [
+                            selected for selected in saved_values[param[1]].split(",")
+                            if selected
+                        ]
+                    self.add_multiselect_param_field(param[0], param[1], param[2], defaults)
                 else:
-                    self.add_param_field(param[0], param[1], param[2])
+                    default = saved_values.get(param[1], param[2])
+                    self.add_param_field(param[0], param[1], default)
 
     def add_param_field(self, label, key, default=""):
         """Add a single parameter input field."""
@@ -1015,9 +1063,13 @@ class MeasurementGUI:
             self.measurement_choice_var.set(0)
             empty_label = ttk.Label(self.measurement_rows_frame, text="(No measurements available)", foreground="gray")
             empty_label.grid(row=0, column=0, sticky=tk.W)
+            self._current_param_context = None
             return
 
-        self.measurement_choice_var.set(1)
+        saved_choice = self._instrument_measurement_choices.get(instrument, 1)
+        if saved_choice < 1 or saved_choice > len(measurements):
+            saved_choice = 1
+        self.measurement_choice_var.set(saved_choice)
         for idx, meas in enumerate(measurements, 1):
             row_frame = ttk.Frame(self.measurement_rows_frame)
             row_frame.grid(row=idx - 1, column=0, sticky=(tk.W, tk.E), pady=2)
@@ -1647,6 +1699,7 @@ class MeasurementGUI:
 
     def get_params_dict(self):
         """Get all parameter values as a dictionary."""
+        self._save_current_parameter_values()
         params = {}
         for key, entry in self.param_entries.items():
             value = entry.get()
